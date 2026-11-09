@@ -15,11 +15,14 @@
 
 import Skeleton from "./key-button-skeleton.svelte"
 import Root from "./key-button.svelte"
+import Depth from "./key-depth.svelte"
 
 export {
+  Depth,
   Root,
   Skeleton,
   //
+  Depth as KeyDepth,
   Root as KeyButton,
   Skeleton as KeyButtonSkeleton,
 }

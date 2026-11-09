@@ -15,28 +15,18 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script lang="ts">
   import * as KeyboardEditor from "$lib/components/keyboard-editor"
-  import { keyboardContext } from "$lib/keyboard"
   import type { WithoutChildren } from "$lib/utils"
   import type { ComponentProps } from "svelte"
-  import { globalStateContext } from "../context.svelte"
-  import { analogInfoQueryContext } from "../queries/analog-info-query.svelte"
   import CalibrationKeyboard from "./calibration-keyboard.svelte"
   import CalibrationMenu from "./calibration-menu.svelte"
   import CalibrationMenubar from "./calibration-menubar.svelte"
 
+  // Live key travel is polled from configurator.svelte while this page or
+  // Performance is open.
+
   const {
     ...props
   }: WithoutChildren<ComponentProps<typeof KeyboardEditor.Root>> = $props()
-
-  const { tab } = $derived(globalStateContext.get())
-  const { demo } = keyboardContext.get()
-
-  const analogInfoQuery = analogInfoQueryContext.get()
-
-  $effect(() => {
-    if (demo) return
-    analogInfoQuery.enabled = tab === "calibration"
-  })
 </script>
 
 <KeyboardEditor.Root {...props}>

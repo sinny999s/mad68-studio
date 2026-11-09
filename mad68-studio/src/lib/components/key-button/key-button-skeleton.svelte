@@ -25,7 +25,10 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 </script>
 
 <div
-  class={cn("size-full rounded-md border border-input shadow-xs", className)}
+  class={cn(
+    "size-full animate-pulse rounded-[0.32em] border border-keycap-edge bg-keycap/60",
+    className,
+  )}
   {...props}
 >
   {@render children?.()}

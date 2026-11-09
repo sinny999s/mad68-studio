@@ -86,7 +86,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 </script>
 
 <section
-  class="grid gap-4 rounded-lg border bg-card p-4 text-card-foreground shadow-sm"
+  class="grid gap-4 rounded-2xl border bg-card p-5 text-card-foreground shadow-sm"
 >
   <div class="flex flex-wrap items-start gap-4">
     <div class="grid flex-1 gap-1">

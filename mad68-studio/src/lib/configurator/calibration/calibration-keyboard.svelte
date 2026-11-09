@@ -29,9 +29,12 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     {#if !analogInfo}
       <KeyButton.Skeleton />
     {:else}
-      <KeyButton.Root>
-        <span>{analogInfo[key].adcValue}</span>
-        <span>{displayDistance(analogInfo[key].distance)}</span>
+      <KeyButton.Root size="sm">
+        <KeyButton.Depth distance={analogInfo[key].distance} />
+        <span class="font-mono">{analogInfo[key].adcValue}</span>
+        <span class="text-muted-foreground"
+          >{displayDistance(analogInfo[key].distance)}</span
+        >
       </KeyButton.Root>
     {/if}
   {/snippet}

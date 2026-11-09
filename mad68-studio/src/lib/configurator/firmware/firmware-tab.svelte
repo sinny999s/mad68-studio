@@ -33,19 +33,21 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   {...props}
 >
   <FixedScrollArea class="flex flex-col gap-6 p-4">
-    <div class="grid gap-1 text-sm">
-      <span class="font-semibold">{keyboard.metadata.name}</span>
-      <span class="text-muted-foreground">
-        libhmk firmware {displayVersion(keyboard.version)}
-        {keyboard.demo ? "(demo keyboard)" : ""}
-      </span>
-    </div>
-    {#if keyboard.demo}
-      <span class="text-sm text-muted-foreground">
-        Connect your keyboard to install firmware.
-      </span>
-    {:else}
-      <FirmwareTools enterBootloader={() => keyboard.bootloader()} />
-    {/if}
+    <section class="grid gap-5 rounded-2xl border bg-card p-5 shadow-sm">
+      <div class="grid gap-1 text-sm">
+        <span class="text-base font-bold">{keyboard.metadata.name}</span>
+        <span class="text-muted-foreground">
+          libhmk firmware {displayVersion(keyboard.version)}
+          {keyboard.demo ? "(demo keyboard)" : ""}
+        </span>
+      </div>
+      {#if keyboard.demo}
+        <span class="text-sm text-muted-foreground">
+          Connect your keyboard to install firmware.
+        </span>
+      {:else}
+        <FirmwareTools enterBootloader={() => keyboard.bootloader()} />
+      {/if}
+    </section>
   </FixedScrollArea>
 </div>

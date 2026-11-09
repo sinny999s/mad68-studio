@@ -194,8 +194,16 @@ export class DemoKeyboard implements Keyboard {
   async bootloader() {}
   async factoryReset() {}
   async recalibrate() {}
+  // Simulated typing so the demo's live key travel has something to show:
+  // keys go down and come back up in a rolling pattern.
   async analogInfo() {
-    return Array(numKeys).fill({ adcValue: 0, distance: 0 })
+    const t = performance.now() / 1000
+    return Array.from({ length: numKeys }, (_, i) => {
+      const phase = (t * 0.9 + i * 0.618) % 3.2
+      const press = phase < 0.7 ? Math.sin((phase / 0.7) * Math.PI) : 0
+      const distance = Math.round(press * 255)
+      return { adcValue: 2300 - Math.round(press * 760), distance }
+    })
   }
   async getCalibration() {
     return {

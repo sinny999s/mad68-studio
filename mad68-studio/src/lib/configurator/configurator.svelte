@@ -16,10 +16,14 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 <script lang="ts">
   import { keyboardContext, type Keyboard } from "$lib/keyboard"
   import { Tabs } from "bits-ui"
-  import { setConfiguratorStateContext } from "./context.svelte"
+  import {
+    globalStateContext,
+    setConfiguratorStateContext,
+  } from "./context.svelte"
   import GameProfileWatcher from "./game-profile-watcher.svelte"
   import ConfiguratorLayout from "./layout.svelte"
   import { setConfiguratorQueryContext } from "./queries"
+  import { analogInfoQueryContext } from "./queries/analog-info-query.svelte"
 
   const { keyboard }: { keyboard: Keyboard } = $props()
 
@@ -37,6 +41,15 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   keyboardContext.set(keyboard)
   setConfiguratorStateContext()
   setConfiguratorQueryContext()
+
+  // Live key travel (about 30 times a second) while a page that shows it is
+  // open: Performance and Calibration.
+  const globalState = globalStateContext.get()
+  const analogInfoQuery = analogInfoQueryContext.get()
+  $effect(() => {
+    analogInfoQuery.enabled =
+      globalState.tab === "performance" || globalState.tab === "calibration"
+  })
 </script>
 
 <GameProfileWatcher />

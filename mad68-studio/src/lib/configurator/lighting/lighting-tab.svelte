@@ -326,8 +326,8 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     }
   }
 
-  const sectionTitle = "text-sm font-semibold"
-  const card = "grid gap-4 rounded-lg border p-4"
+  const sectionTitle = "text-base font-bold"
+  const card = "grid gap-4 rounded-2xl border bg-card p-5 shadow-sm"
 </script>
 
 <div
@@ -382,51 +382,53 @@ this program. If not, see <https://www.gnu.org/licenses/>.
         </div>
       {/if}
 
-      <div class="flex flex-wrap items-end gap-6">
-        <Switch
-          checked={info.on}
-          onCheckedChange={(v) => update({ on: v })}
-          id="rgb-on"
-          title="Lighting"
-          description="Fn + Tab on the keyboard"
-        />
-        <CommitSlider
-          class="min-w-64 flex-1"
-          committed={info.brightness}
-          display={(v) => percent(v, info?.maxBrightness ?? 210)}
-          max={info.maxBrightness}
-          min={0}
-          onCommit={(v) => update({ brightness: v, on: true })}
-          step={1}
-          title="Brightness"
-          description="Capped at the stock maximum. Fn + Q / Fn + A."
-        />
-      </div>
+      <section class={card}>
+        <div class="flex flex-wrap items-end gap-6">
+          <Switch
+            checked={info.on}
+            onCheckedChange={(v) => update({ on: v })}
+            id="rgb-on"
+            title="Lighting"
+            description="Fn + Tab on the keyboard"
+          />
+          <CommitSlider
+            class="min-w-64 flex-1"
+            committed={info.brightness}
+            display={(v) => percent(v, info?.maxBrightness ?? 210)}
+            max={info.maxBrightness}
+            min={0}
+            onCommit={(v) => update({ brightness: v, on: true })}
+            step={1}
+            title="Brightness"
+            description="Capped at the stock maximum. Fn + Q / Fn + A."
+          />
+        </div>
 
-      <div class="grid gap-2">
-        <LightingPreview
-          config={configOf(info)}
-          maxBrightness={info.maxBrightness}
-          {keyColors}
-          {keyCount}
-          {baseLayer}
-          painting={v2 && info.mode === Effect.Custom}
-          {onpaint}
-        />
-        <span class="text-xs text-muted-foreground">
-          {#if v2 && info.mode === Effect.Custom}
-            {tool === "pick"
-              ? "Click a key to pick up its colour."
-              : "Click or drag across keys to paint them with the brush colour."}
-          {:else if fx?.keys}
-            Type on your keyboard or click keys here to see the effect.
-          {:else}
-            Live preview of the lighting on your keyboard.
-          {/if}
-        </span>
-      </div>
+        <div class="grid gap-2">
+          <LightingPreview
+            config={configOf(info)}
+            maxBrightness={info.maxBrightness}
+            {keyColors}
+            {keyCount}
+            {baseLayer}
+            painting={v2 && info.mode === Effect.Custom}
+            {onpaint}
+          />
+          <span class="text-xs text-muted-foreground">
+            {#if v2 && info.mode === Effect.Custom}
+              {tool === "pick"
+                ? "Click a key to pick up its colour."
+                : "Click or drag across keys to paint them with the brush colour."}
+            {:else if fx?.keys}
+              Type on your keyboard or click keys here to see the effect.
+            {:else}
+              Live preview of the lighting on your keyboard.
+            {/if}
+          </span>
+        </div>
+      </section>
 
-      <section class="grid gap-3">
+      <section class={cn(card, "gap-3")}>
         <div class="flex items-baseline justify-between">
           <span class={sectionTitle}>Effect</span>
           <span class="text-xs text-muted-foreground">
@@ -437,9 +439,9 @@ this program. If not, see <https://www.gnu.org/licenses/>.
           {#each EFFECTS.slice(0, info.modeCount) as e, i (e.name)}
             <button
               class={cn(
-                "grid gap-1.5 rounded-lg border p-1.5 text-left text-xs transition-colors hover:bg-muted",
+                "grid gap-1.5 rounded-xl border bg-background/40 p-1.5 text-left text-xs transition-colors hover:bg-muted",
                 info.mode === i &&
-                  "border-primary bg-muted ring-1 ring-primary",
+                  "border-primary bg-muted shadow-[0_0_14px_-4px_var(--primary)] ring-1 ring-primary",
               )}
               title={e.description}
               onclick={() => update({ mode: i, on: true })}
@@ -448,7 +450,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
                 class="h-8 rounded-md border border-white/10"
                 style:background={swatch(i, info)}
               ></div>
-              <span class="truncate px-0.5 font-medium">{e.name}</span>
+              <span class="truncate px-0.5 font-semibold">{e.name}</span>
             </button>
           {/each}
         </div>
@@ -458,7 +460,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
       </section>
 
       {#if fx}
-        <section class="grid gap-6 md:grid-cols-2">
+        <section class={cn(card, "gap-6 md:grid-cols-2")}>
           {#if fx.color}
             <ColorPicker
               hue={info.hue}

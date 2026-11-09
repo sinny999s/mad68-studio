@@ -14,7 +14,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 -->
 
 <script lang="ts">
-  import { KeyButton } from "$lib/components/key-button"
+  import { KeyButton, KeyDepth } from "$lib/components/key-button"
   import { displayDistance } from "$lib/distance"
   import type { HMK_Actuation } from "$lib/libhmk/actuation"
   import type { WithoutChildrenOrChild } from "$lib/utils"
@@ -22,9 +22,12 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
   const {
     actuation,
+    distance,
     ...props
   }: WithoutChildrenOrChild<ComponentProps<typeof KeyButton>> & {
     actuation: HMK_Actuation
+    // Live key travel (0-255), when the keyboard reports it
+    distance?: number
   } = $props()
 
   const { actuationPoint, rtDown, rtUp, continuous } = $derived(actuation)
@@ -32,6 +35,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 </script>
 
 <KeyButton size="sm" {...props}>
+  <KeyDepth actuation={actuationPoint} {distance} />
   <span>{displayDistance(actuationPoint)}{continuousLabel}</span>
   {#if rtDown > 0}
     <span>{displayDistance(rtDown)}{continuousLabel}</span>

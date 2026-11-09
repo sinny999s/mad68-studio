@@ -115,8 +115,8 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   {...props}
 >
   <FixedScrollArea class="flex flex-col gap-4 p-4">
-    <div class="grid shrink-0">
-      <span class="font-semibold">Configure Profiles</span>
+    <div class="grid shrink-0 gap-0.5">
+      <span class="text-base font-bold">Configure Profiles</span>
       <span class="text-sm text-muted-foreground">
         Manage your keyboard profiles here. You can import, export, and
         customize them.
@@ -125,7 +125,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     <div class="grid grid-cols-2 gap-4">
       {#each { length: numProfiles }, profile (profile)}
         <div
-          class="flex items-center gap-4 rounded-lg border bg-card p-4 text-card-foreground shadow-sm"
+          class="flex items-center gap-4 rounded-2xl border bg-card p-5 text-card-foreground shadow-sm"
         >
           <div class="grid flex-1 truncate font-semibold">
             Profile {profile}

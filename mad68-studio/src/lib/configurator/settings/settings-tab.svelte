@@ -56,113 +56,120 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   {...props}
 >
   <FixedScrollArea class="flex flex-col gap-4 p-4">
-    {#if usbHighSpeed && isFeatureAvailable("pollingRateSwitch", version)}
-      <Switch
-        bind:checked={
-          () => options?.highPollingRateEnabled ?? false,
-          (v) =>
-            options &&
-            optionsQuery.set({
-              data: { ...options, highPollingRateEnabled: v },
-            })
-        }
-        id="8000hz-polling-rate"
-        title="8000Hz Polling Rate"
-        description="Enable the 8000Hz polling rate for faster response times, but may increase the CPU usage of the host device. Restart the keyboard to apply changes. This setting applies globally across all profiles."
-      />
-    {/if}
-    <div class="flex flex-col gap-2">
-      <div class="grid text-sm text-wrap">
-        <span class="font-semibold">Restart Keyboard</span>
-        <span class="text-muted-foreground">
-          {#if canRestart || demo}
-            The keyboard will disconnect and reconnect. No changes will be made
-            to your keyboard settings.
-          {:else}
-            On this firmware a restart from the app leaves the keyboard in
-            update mode, so unplug it and plug it back in instead. Firmware v6.1
-            fixes this.
-          {/if}
-        </span>
+    <div
+      class="flex flex-col divide-y rounded-2xl border bg-card shadow-sm [&>*]:p-5"
+    >
+      {#if usbHighSpeed && isFeatureAvailable("pollingRateSwitch", version)}
+        <Switch
+          bind:checked={
+            () => options?.highPollingRateEnabled ?? false,
+            (v) =>
+              options &&
+              optionsQuery.set({
+                data: { ...options, highPollingRateEnabled: v },
+              })
+          }
+          id="8000hz-polling-rate"
+          title="8000Hz Polling Rate"
+          description="Enable the 8000Hz polling rate for faster response times, but may increase the CPU usage of the host device. Restart the keyboard to apply changes. This setting applies globally across all profiles."
+        />
+      {/if}
+      <div class="flex flex-col gap-2">
+        <div class="grid text-sm text-wrap">
+          <span class="font-bold">Restart Keyboard</span>
+          <span class="text-muted-foreground">
+            {#if canRestart || demo}
+              The keyboard will disconnect and reconnect. No changes will be
+              made to your keyboard settings.
+            {:else}
+              On this firmware a restart from the app leaves the keyboard in
+              update mode, so unplug it and plug it back in instead. Firmware
+              v6.1 fixes this.
+            {/if}
+          </span>
+        </div>
+        <div>
+          <Button
+            disabled={demo || !canRestart}
+            onclick={() => {
+              markRestart("settings")
+              keyboard.reboot().catch(() => {})
+            }}
+            size="sm"
+            variant="outline"
+          >
+            Restart Keyboard
+          </Button>
+        </div>
       </div>
-      <div>
-        <Button
-          disabled={demo || !canRestart}
-          onclick={() => {
-            markRestart("settings")
-            keyboard.reboot().catch(() => {})
-          }}
-          size="sm"
-          variant="outline"
-        >
-          Restart Keyboard
-        </Button>
+      <div class="flex flex-col gap-2">
+        <div class="grid text-sm text-wrap">
+          <span class="font-bold">Enter Bootloader Mode</span>
+          <span class="text-muted-foreground">
+            The keyboard will restart and enter bootloader mode if it is
+            supported by the firmware. No changes will be made to your keyboard
+            settings.
+          </span>
+        </div>
+        <div>
+          <Button
+            disabled={demo}
+            onclick={() => keyboard.bootloader()}
+            size="sm"
+            variant="outline"
+          >
+            Enter Bootloader Mode
+          </Button>
+        </div>
       </div>
-    </div>
-    <div class="flex flex-col gap-2">
-      <div class="grid text-sm text-wrap">
-        <span class="font-semibold">Enter Bootloader Mode</span>
-        <span class="text-muted-foreground">
-          The keyboard will restart and enter bootloader mode if it is supported
-          by the firmware. No changes will be made to your keyboard settings.
-        </span>
-      </div>
-      <div>
-        <Button
-          disabled={demo}
-          onclick={() => keyboard.bootloader()}
-          size="sm"
-          variant="outline"
-        >
-          Enter Bootloader Mode
-        </Button>
-      </div>
-    </div>
-    <div class="flex flex-col gap-2">
-      <div class="grid text-sm text-wrap">
-        <span class="font-semibold">Factory Reset</span>
-        <span class="text-muted-foreground">
-          Revert the keyboard to its factory settings defined by the firmware.
-          All user data and settings will be lost.
-        </span>
-      </div>
-      <div>
-        <Dialog.Root>
-          <Dialog.Trigger>
-            {#snippet child({ props })}
-              <Button
-                disabled={demo}
-                size="sm"
-                variant="destructive"
-                {...props}
-              >
-                Factory Reset
-              </Button>
-            {/snippet}
-          </Dialog.Trigger>
-          <Dialog.Content>
-            <Dialog.Header>
-              <Dialog.Title>Factory Reset?</Dialog.Title>
-              <Dialog.Description>
-                Are you sure you want to factory reset your keyboard?
-              </Dialog.Description>
-            </Dialog.Header>
-            <Dialog.Footer>
-              <Dialog.Close>
-                {#snippet child({ props })}
-                  <Button size="sm" variant="outline" {...props}>Cancel</Button>
-                {/snippet}
-              </Dialog.Close>
-              <Dialog.Close onclick={() => profileQuery.factoryReset()}>
-                {#snippet child({ props })}
-                  <Button size="sm" variant="destructive" {...props}>
-                    Factory Reset
-                  </Button>
-                {/snippet}
-              </Dialog.Close>
-            </Dialog.Footer>
-          </Dialog.Content>
-        </Dialog.Root>
+      <div class="flex flex-col gap-2">
+        <div class="grid text-sm text-wrap">
+          <span class="font-bold">Factory Reset</span>
+          <span class="text-muted-foreground">
+            Revert the keyboard to its factory settings defined by the firmware.
+            All user data and settings will be lost.
+          </span>
+        </div>
+        <div>
+          <Dialog.Root>
+            <Dialog.Trigger>
+              {#snippet child({ props })}
+                <Button
+                  disabled={demo}
+                  size="sm"
+                  variant="destructive"
+                  {...props}
+                >
+                  Factory Reset
+                </Button>
+              {/snippet}
+            </Dialog.Trigger>
+            <Dialog.Content>
+              <Dialog.Header>
+                <Dialog.Title>Factory Reset?</Dialog.Title>
+                <Dialog.Description>
+                  Are you sure you want to factory reset your keyboard?
+                </Dialog.Description>
+              </Dialog.Header>
+              <Dialog.Footer>
+                <Dialog.Close>
+                  {#snippet child({ props })}
+                    <Button size="sm" variant="outline" {...props}
+                      >Cancel</Button
+                    >
+                  {/snippet}
+                </Dialog.Close>
+                <Dialog.Close onclick={() => profileQuery.factoryReset()}>
+                  {#snippet child({ props })}
+                    <Button size="sm" variant="destructive" {...props}>
+                      Factory Reset
+                    </Button>
+                  {/snippet}
+                </Dialog.Close>
+              </Dialog.Footer>
+            </Dialog.Content>
+          </Dialog.Root>
+        </div>
       </div>
     </div>
   </FixedScrollArea>

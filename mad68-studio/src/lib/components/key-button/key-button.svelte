@@ -24,8 +24,9 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     base: cn(
       toggleVariants({ variant: "outline" }),
       "size-full flex-col gap-0 p-0 text-[length:inherit] leading-[1em] whitespace-pre-wrap [&_svg:not([class*='size-'])]:size-[1em]",
-      // A keycap: rounded top, darker skirt at the bottom edge
-      "rounded-[0.32em] border-keycap-edge bg-keycap font-semibold text-keycap-legend shadow-[inset_0_-0.16em_0_var(--keycap-edge),inset_0_1px_0_rgb(255_255_255/0.07)] transition-[background-color,box-shadow,transform] duration-100 hover:bg-keycap-hover hover:text-keycap-legend active:translate-y-px",
+      // A keycap: rounded top, darker skirt at the bottom edge. Its own
+      // stacking context, so a depth fill can sit behind the legends.
+      "relative isolate overflow-hidden rounded-[0.32em] border-keycap-edge bg-keycap font-semibold text-keycap-legend shadow-[inset_0_-0.16em_0_var(--keycap-edge),inset_0_1px_0_rgb(255_255_255/0.07)] transition-[background-color,box-shadow,transform] duration-100 hover:bg-keycap-hover hover:text-keycap-legend active:translate-y-px",
       // Selected: lit in the accent colour
       "data-[state=on]:border-primary data-[state=on]:bg-[color-mix(in_oklab,var(--primary)_9%,var(--keycap-hover))] data-[state=on]:text-foreground data-[state=on]:shadow-[inset_0_0_0_1px_var(--primary),inset_0_-0.16em_0_color-mix(in_oklab,var(--primary)_55%,var(--keycap-edge)),0_0_0.7em_color-mix(in_oklab,var(--primary)_30%,transparent)]",
     ),
