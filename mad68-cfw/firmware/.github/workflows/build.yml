@@ -1,0 +1,114 @@
+name: Build Workflow
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "setup.py"
+      - "requirements.txt"
+      - "hardware/**"
+      - "include/**"
+      - "keyboards/**"
+      - "linker/**"
+      - "scripts/**"
+      - "src/**"
+      - ".github/workflows/build.yml"
+      - ".github/workflows/ci_define_matrix.py"
+  push:
+    branches: [main, dev]
+    paths:
+      - "setup.py"
+      - "requirements.txt"
+      - "hardware/**"
+      - "include/**"
+      - "keyboards/**"
+      - "linker/**"
+      - "scripts/**"
+      - "src/**"
+      - ".github/workflows/build.yml"
+      - ".github/workflows/ci_define_matrix.py"
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  define-matrix:
+    name: Define Action Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.define-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout libhmk
+        uses: actions/checkout@v6
+
+      - name: Generate Matrix
+        id: define-matrix
+        run: |
+          MATRIX_JSON=$(python .github/workflows/ci_define_matrix.py)
+          echo "matrix=$MATRIX_JSON"
+          echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
+
+  build:
+    name: Build Firmware
+    needs: define-matrix
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.define-matrix.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout libhmk
+        uses: actions/checkout@v6
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Setup PlatformIO Cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+          key: ${{ runner.os }}-pio
+
+      - name: Install Python Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+
+      - name: Build ${{ matrix.keyboard }}
+        run: |
+          python setup.py -k ${{ matrix.keyboard }}
+          pio run
+
+      - name: Archive Firmware Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ matrix.keyboard }}
+          path: |
+            .pio/build/${{ matrix.keyboard }}/firmware.bin
+            .pio/build/${{ matrix.keyboard }}/firmware.elf
+
+  release:
+    name: Create Releast Draft
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Firmware Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: firmware-*
+
+      - name: Zip Firmware Binaries
+        run: zip -r firmware.zip firmware-*
+
+      - name: Create Release Draft
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: firmware.zip

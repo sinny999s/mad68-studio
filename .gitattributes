@@ -1,0 +1,12 @@
+# Store text with LF line endings, so checks behave the same on every OS
+* text=auto eol=lf
+
+*.bin binary
+*.img binary
+*.elf binary
+*.exe binary
+*.png binary
+*.ico binary
+*.jpg binary
+*.woff binary
+*.woff2 binary

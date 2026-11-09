@@ -1,0 +1,539 @@
+{
+  "name": "MAD68 HE (libhmk)",
+  "manufacturer": "MADLIONS",
+  "maintainer": "devyn",
+  "usb": {
+    "vid": "0x373B",
+    "pid": "0x1F58",
+    "port": "hs"
+  },
+  "keyboard": {
+    "num_profiles": 4,
+    "num_layers": 4,
+    "num_keys": 68,
+    "num_advanced_keys": 32
+  },
+  "hardware": {
+    "hse_value": 16000000,
+    "driver": "stm32f407xx_mad"
+  },
+  "analog": {
+    "adc_resolution": 12,
+    "invert_adc": false
+  },
+  "calibration": {
+    "initial_rest_value": 1100,
+    "initial_bottom_out_threshold": 500
+  },
+  "layout": {
+    "keymap": [
+      [
+        {
+          "key": 0
+        },
+        {
+          "key": 1
+        },
+        {
+          "key": 2
+        },
+        {
+          "key": 3
+        },
+        {
+          "key": 4
+        },
+        {
+          "key": 5
+        },
+        {
+          "key": 6
+        },
+        {
+          "key": 7
+        },
+        {
+          "key": 8
+        },
+        {
+          "key": 9
+        },
+        {
+          "key": 10
+        },
+        {
+          "key": 11
+        },
+        {
+          "key": 12
+        },
+        {
+          "key": 13,
+          "w": 2.0
+        },
+        {
+          "key": 14
+        }
+      ],
+      [
+        {
+          "key": 15,
+          "w": 1.5
+        },
+        {
+          "key": 16
+        },
+        {
+          "key": 17
+        },
+        {
+          "key": 18
+        },
+        {
+          "key": 19
+        },
+        {
+          "key": 20
+        },
+        {
+          "key": 21
+        },
+        {
+          "key": 22
+        },
+        {
+          "key": 23
+        },
+        {
+          "key": 24
+        },
+        {
+          "key": 25
+        },
+        {
+          "key": 26
+        },
+        {
+          "key": 27
+        },
+        {
+          "key": 28,
+          "w": 1.5
+        },
+        {
+          "key": 29
+        }
+      ],
+      [
+        {
+          "key": 30,
+          "w": 1.75
+        },
+        {
+          "key": 31
+        },
+        {
+          "key": 32
+        },
+        {
+          "key": 33
+        },
+        {
+          "key": 34
+        },
+        {
+          "key": 35
+        },
+        {
+          "key": 36
+        },
+        {
+          "key": 37
+        },
+        {
+          "key": 38
+        },
+        {
+          "key": 39
+        },
+        {
+          "key": 40
+        },
+        {
+          "key": 41
+        },
+        {
+          "key": 42,
+          "w": 2.25
+        },
+        {
+          "key": 43
+        }
+      ],
+      [
+        {
+          "key": 44,
+          "w": 2.25
+        },
+        {
+          "key": 45
+        },
+        {
+          "key": 46
+        },
+        {
+          "key": 47
+        },
+        {
+          "key": 48
+        },
+        {
+          "key": 49
+        },
+        {
+          "key": 50
+        },
+        {
+          "key": 51
+        },
+        {
+          "key": 52
+        },
+        {
+          "key": 53
+        },
+        {
+          "key": 54
+        },
+        {
+          "key": 55,
+          "w": 1.75
+        },
+        {
+          "key": 56
+        },
+        {
+          "key": 57
+        }
+      ],
+      [
+        {
+          "key": 58,
+          "w": 1.25
+        },
+        {
+          "key": 59,
+          "w": 1.25
+        },
+        {
+          "key": 60,
+          "w": 1.25
+        },
+        {
+          "key": 61,
+          "w": 6.25
+        },
+        {
+          "key": 62
+        },
+        {
+          "key": 63
+        },
+        {
+          "key": 64
+        },
+        {
+          "key": 65
+        },
+        {
+          "key": 66
+        },
+        {
+          "key": 67
+        }
+      ]
+    ]
+  },
+  "keymap": [
+    [
+      "KC_ESC",
+      "KC_1",
+      "KC_2",
+      "KC_3",
+      "KC_4",
+      "KC_5",
+      "KC_6",
+      "KC_7",
+      "KC_8",
+      "KC_9",
+      "KC_0",
+      "KC_MINS",
+      "KC_EQL",
+      "KC_BSPC",
+      "KC_INS",
+      "KC_TAB",
+      "KC_Q",
+      "KC_W",
+      "KC_E",
+      "KC_R",
+      "KC_T",
+      "KC_Y",
+      "KC_U",
+      "KC_I",
+      "KC_O",
+      "KC_P",
+      "KC_LBRC",
+      "KC_RBRC",
+      "KC_BSLS",
+      "KC_DEL",
+      "KC_CAPS",
+      "KC_A",
+      "KC_S",
+      "KC_D",
+      "KC_F",
+      "KC_G",
+      "KC_H",
+      "KC_J",
+      "KC_K",
+      "KC_L",
+      "KC_SCLN",
+      "KC_QUOT",
+      "KC_ENT",
+      "KC_PGUP",
+      "KC_LSFT",
+      "KC_Z",
+      "KC_X",
+      "KC_C",
+      "KC_V",
+      "KC_B",
+      "KC_N",
+      "KC_M",
+      "KC_COMM",
+      "KC_DOT",
+      "KC_SLSH",
+      "KC_RSFT",
+      "KC_UP",
+      "KC_PGDN",
+      "KC_LCTL",
+      "KC_LGUI",
+      "KC_LALT",
+      "KC_SPC",
+      "KC_RALT",
+      "MO(1)",
+      "KC_RCTL",
+      "KC_LEFT",
+      "KC_DOWN",
+      "KC_RGHT"
+    ],
+    [
+      "KC_GRV",
+      "KC_F1",
+      "KC_F2",
+      "KC_F3",
+      "KC_F4",
+      "KC_F5",
+      "KC_F6",
+      "KC_F7",
+      "KC_F8",
+      "KC_F9",
+      "KC_F10",
+      "KC_F11",
+      "KC_F12",
+      "KC_TRNS",
+      "SP_BOOT",
+      "SP_RGB_TOG",
+      "SP_RGB_VAI",
+      "SP_RGB_MOD",
+      "SP_RGB_HUI",
+      "SP_RGB_SPI",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "SP_RGB_VAD",
+      "SP_RGB_RMOD",
+      "SP_RGB_HUD",
+      "SP_RGB_SPD",
+      "SP_GAMEPAD_TOG",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS"
+    ],
+    [
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS"
+    ],
+    [
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS",
+      "KC_TRNS"
+    ]
+  ]
+}
