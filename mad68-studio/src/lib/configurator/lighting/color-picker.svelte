@@ -86,7 +86,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
       style:background={css(color)}
     ></div>
     <div class="grid flex-1 text-sm">
-      <span class="font-medium">{title}</span>
+      <span class="font-bold">{title}</span>
       {#if description}
         <span class="text-xs text-muted-foreground">{description}</span>
       {/if}

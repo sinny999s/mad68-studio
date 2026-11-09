@@ -84,7 +84,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   </div>
   <div class="flex flex-col gap-4">
     <div class="grid text-sm">
-      <span class="font-medium">
+      <span class="font-bold">
         {`Select ${numKeys > 1 ? `${numKeys} keys` : `${numKeys} key`} to assign ${title} to.`}
       </span>
       <span class="text-muted-foreground">{description}</span>

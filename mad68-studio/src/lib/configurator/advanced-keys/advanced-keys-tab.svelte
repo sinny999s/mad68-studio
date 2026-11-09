@@ -38,7 +38,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   </KeyboardEditor.Pane>
   <KeyboardEditor.Handle />
   <KeyboardEditor.Pane>
-    <KeyboardEditor.Container>
+    <KeyboardEditor.Container card>
       {#if create !== null}
         <AdvancedKeysCreateMenu />
       {:else if index !== null}

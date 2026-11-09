@@ -55,7 +55,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
 <FixedScrollArea class="flex flex-col gap-4 p-4 pt-0">
   <div class="grid text-sm">
-    <span class="font-medium">Configure Macro Actions</span>
+    <span class="font-bold">Configure Macro Actions</span>
     <span class="text-muted-foreground">
       Create a sequence of actions to be triggered when the key is pressed.
       Assign bindings for each action using the menu on the right.

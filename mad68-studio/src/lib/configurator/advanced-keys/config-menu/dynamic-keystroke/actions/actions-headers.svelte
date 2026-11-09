@@ -23,7 +23,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 </script>
 
 <div class="grid place-items-center" style:grid-area="bindings">
-  <span class="text-sm font-medium">Bindings</span>
+  <span class="text-sm font-bold">Bindings</span>
 </div>
 {#each dynamicKeystrokeHeaders as { icon: Icon, tooltip }, i (i)}
   <div class="flex items-center" style:grid-area="icon{i}">

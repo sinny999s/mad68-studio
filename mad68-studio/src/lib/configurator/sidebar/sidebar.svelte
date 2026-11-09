@@ -22,7 +22,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 </script>
 
 <Tabs.List>
-  <Sidebar.Root collapsible="icon">
+  <Sidebar.Root collapsible="icon" variant="floating">
     <Sidebar.Header>
       <KeyboardMenu />
     </Sidebar.Header>

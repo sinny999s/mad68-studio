@@ -40,7 +40,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
 <FixedScrollArea class="flex flex-col gap-4 p-4 pt-0">
   <div class="grid text-sm">
-    <span class="font-medium">Configure Toggle Binding</span>
+    <span class="font-bold">Configure Toggle Binding</span>
     <span class="text-muted-foreground">
       Assign a binding for the toggle action of the key.
     </span>

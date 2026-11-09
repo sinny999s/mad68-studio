@@ -31,7 +31,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
 <FixedScrollArea class="flex flex-col gap-4 p-4 pt-0">
   <div class="grid text-sm">
-    <span class="font-medium">Configure DKS Bindings</span>
+    <span class="font-bold">Configure DKS Bindings</span>
     <span class="text-muted-foreground">
       Assign bindings using the menu on the right. For a tap action, click the
       plus icon once. For a hold action, click the plus icon and drag it to the

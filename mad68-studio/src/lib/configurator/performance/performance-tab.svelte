@@ -33,7 +33,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   </KeyboardEditor.Pane>
   <KeyboardEditor.Handle />
   <KeyboardEditor.Pane>
-    <KeyboardEditor.Container>
+    <KeyboardEditor.Container card>
       <PerformanceMenu />
     </KeyboardEditor.Container>
   </KeyboardEditor.Pane>

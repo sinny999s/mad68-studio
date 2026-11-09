@@ -7,7 +7,7 @@ wrapped in Electron, with MAD68-specific additions.
 
 ## Run it
 
-Start `release/MAD68-Studio-0.4.2-portable.exe` (also copied to the Desktop as `MAD68 Studio.exe`). It needs no install.
+Start `release/MAD68-Studio-0.5.0-portable.exe` (also copied to the Desktop as `MAD68 Studio.exe`). It needs no install.
 
 - Windows SmartScreen may warn because the exe is not code-signed. Choose
   **More info, then Run anyway**.

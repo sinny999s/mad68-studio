@@ -4,77 +4,97 @@
 
 @import "shadcn-svelte/tailwind.css";
 
-@import "@fontsource-variable/inter";
-
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * MAD68 Studio theme: slate panels on a darker slate background, one warm
+ * yellow accent for anything selected or active, and keycaps on a case for
+ * the keyboard. Light mode keeps the same structure on soft greys.
+ */
+
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --radius: 0.75rem;
+  --background: #eceef2;
+  --foreground: #1c1f25;
+  --card: #ffffff;
+  --card-foreground: #1c1f25;
+  --popover: #ffffff;
+  --popover-foreground: #1c1f25;
+  --primary: #f0b419;
+  --primary-foreground: #1c1f25;
+  --secondary: #e3e6eb;
+  --secondary-foreground: #1c1f25;
+  --muted: #e7eaee;
+  --muted-foreground: #626976;
+  --accent: #e1e4ea;
+  --accent-foreground: #1c1f25;
+  --destructive: #d23f3c;
+  --border: #d9dde4;
+  --input: #cfd4dc;
+  --ring: #e0a40c;
+  --chart-1: #f0b419;
+  --chart-2: #3fa7f5;
+  --chart-3: #9b6cf6;
+  --chart-4: #2ec27e;
+  --chart-5: #f0605d;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #3a3f49;
+  --sidebar-primary: #f0b419;
+  --sidebar-primary-foreground: #1c1f25;
+  --sidebar-accent: #eef0f4;
+  --sidebar-accent-foreground: #1c1f25;
+  --sidebar-border: #e1e4ea;
+  --sidebar-ring: #e0a40c;
+
+  /* keyboard */
+  --case: #d5dae1;
+  --case-edge: #c3c9d2;
+  --keycap: #fbfbfc;
+  --keycap-hover: #ffffff;
+  --keycap-edge: #c6ccd5;
+  --keycap-legend: #2a2e36;
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: #1b1d22;
+  --foreground: #eceef2;
+  --card: #25272d;
+  --card-foreground: #eceef2;
+  --popover: #2a2c33;
+  --popover-foreground: #eceef2;
+  --primary: #f6c544;
+  --primary-foreground: #1b1d22;
+  --secondary: #30333a;
+  --secondary-foreground: #eceef2;
+  --muted: #2d3037;
+  --muted-foreground: #9aa0ab;
+  --accent: #33363e;
+  --accent-foreground: #f4f5f7;
+  --destructive: #ef5f5c;
+  --border: #33363e;
+  --input: #3b3f48;
+  --ring: #f6c544;
+  --chart-1: #f6c544;
+  --chart-2: #4fb3ff;
+  --chart-3: #a47bff;
+  --chart-4: #3ad08c;
+  --chart-5: #ef5f5c;
+  --sidebar: #25272d;
+  --sidebar-foreground: #c9cdd4;
+  --sidebar-primary: #f6c544;
+  --sidebar-primary-foreground: #1b1d22;
+  --sidebar-accent: #31343b;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #31343b;
+  --sidebar-ring: #f6c544;
+
+  /* keyboard */
+  --case: #141518;
+  --case-edge: #2c2f36;
+  --keycap: #33363e;
+  --keycap-hover: #3c4049;
+  --keycap-edge: #1f2126;
+  --keycap-legend: #e6e8ec;
 }
 
 @theme inline {
@@ -113,7 +133,12 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
-  --font-sans: "Inter Variable", sans-serif;
+  --color-case: var(--case);
+  --color-case-edge: var(--case-edge);
+  --color-keycap: var(--keycap);
+  --color-keycap-hover: var(--keycap-hover);
+  --color-keycap-edge: var(--keycap-edge);
+  --color-keycap-legend: var(--keycap-legend);
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
@@ -132,6 +157,6 @@
 }
 
 @theme {
-  --font-sans: "Geist Variable", sans-serif;
-  --font-mono: "Geist Mono Variable", monospace;
+  --font-sans: "Nunito Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
 }

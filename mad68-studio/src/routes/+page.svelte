@@ -90,7 +90,13 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   <main class="py-24">
     <div class="mx-auto max-w-7xl px-6">
       <div class="mx-auto max-w-2xl text-center">
-        <h1 class="text-5xl font-semibold tracking-tight">MAD68 Studio</h1>
+        <span
+          class="inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1 text-sm font-semibold text-muted-foreground"
+        >
+          <span class="size-2 rounded-full bg-primary"></span>
+          MadLions MAD68 HE
+        </span>
+        <h1 class="mt-5 text-6xl font-black tracking-tight">MAD68 Studio</h1>
         <p class="mt-4 text-lg font-medium text-wrap text-muted-foreground">
           Configure your MadLions MAD68 HE: key bindings, actuation points,
           Rapid Trigger, advanced keys, per-key RGB and firmware updates.
@@ -117,7 +123,9 @@ this program. If not, see <https://www.gnu.org/licenses/>.
         {/if}
       </div>
       <div class="mt-16 grid place-items-center">
-        <div class="overflow-hidden rounded-xl border shadow-md">
+        <div
+          class="overflow-hidden rounded-2xl border shadow-[0_30px_80px_-30px_rgb(0_0_0/0.6)]"
+        >
           <img
             class="dark:hidden"
             alt="Screenshot"

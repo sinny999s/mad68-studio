@@ -160,7 +160,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
       />
     </svg>
     <div class="grid justify-items-center text-sm">
-      <span class="font-medium">{label}</span>
+      <span class="font-bold">{label}</span>
       <span class="text-muted-foreground tabular-nums">
         x {pct(x, 32767)}% · y {pct(y, 32767)}%
       </span>
@@ -184,7 +184,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
       ></div>
     </div>
     <div class="grid justify-items-center text-sm">
-      <span class="font-medium">{label}</span>
+      <span class="font-bold">{label}</span>
       <span class="text-muted-foreground tabular-nums">
         {pct(value, 255)}%
       </span>
@@ -195,7 +195,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 <div class={cn("grid grid-cols-[minmax(0,1fr)_28rem]", className)} {...props}>
   <FixedScrollArea class="flex flex-col gap-4 p-6 pt-2 pr-4">
     <div class="grid text-sm">
-      <span class="font-medium">Test the Controller</span>
+      <span class="font-bold">Test the Controller</span>
       <span class="text-muted-foreground">
         What the keyboard is sending as an Xbox controller right now, live.
       </span>
@@ -242,7 +242,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   </FixedScrollArea>
   <FixedScrollArea class="flex flex-col gap-4 p-6 pt-2 pl-4 text-sm">
     <div class="grid gap-1">
-      <span class="font-medium">Switching between typing and playing</span>
+      <span class="font-bold">Switching between typing and playing</span>
       <span class="text-muted-foreground">
         Press <kbd class="rounded border px-1">Fn</kbd> +
         <kbd class="rounded border px-1">G</kbd> to switch controller output off and
@@ -251,7 +251,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
       </span>
     </div>
     <div class="grid gap-1">
-      <span class="font-medium">Check in Windows</span>
+      <span class="font-bold">Check in Windows</span>
       <span class="text-muted-foreground">
         Press <kbd class="rounded border px-1">Win</kbd> +
         <kbd class="rounded border px-1">R</kbd>, type
@@ -260,7 +260,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
       </span>
     </div>
     <div class="grid gap-1">
-      <span class="font-medium">In games</span>
+      <span class="font-bold">In games</span>
       <span class="text-muted-foreground">
         Games that support Xbox controllers read the sticks and triggers
         directly. Some games stop reading the keyboard while a controller is in

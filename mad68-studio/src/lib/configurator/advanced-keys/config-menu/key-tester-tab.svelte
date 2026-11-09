@@ -27,11 +27,11 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 <KeyTester.Root>
   <div class={cn("flex flex-col gap-4", className)} {...props}>
     <div class="flex flex-col gap-2">
-      <div class="text-sm font-medium">Pressed Keys</div>
+      <div class="text-sm font-bold">Pressed Keys</div>
       <KeyTester.Press class="h-24 max-w-72" />
     </div>
     <div class="flex flex-col gap-2">
-      <div class="text-sm font-medium">Released Keys</div>
+      <div class="text-sm font-bold">Released Keys</div>
       <KeyTester.Release class="h-24 max-w-72" />
     </div>
   </div>

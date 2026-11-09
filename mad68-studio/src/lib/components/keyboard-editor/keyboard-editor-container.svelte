@@ -20,10 +20,21 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   const {
     children,
     class: className,
+    card = false,
     ...props
-  }: HTMLAttributes<HTMLDivElement> = $props()
+  }: HTMLAttributes<HTMLDivElement> & {
+    // The settings area under the keyboard, shown as a panel
+    card?: boolean
+  } = $props()
 </script>
 
-<div class={cn("mx-auto w-full max-w-7xl flex-1", className)} {...props}>
+<div
+  class={cn(
+    "mx-auto w-full max-w-7xl flex-1",
+    card && "mb-4 w-[calc(100%-2rem)] rounded-2xl border bg-card shadow-sm",
+    className,
+  )}
+  {...props}
+>
   {@render children?.()}
 </div>

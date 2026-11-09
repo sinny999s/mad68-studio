@@ -495,7 +495,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
               {/if}
               {#if fx.direction && v2}
                 <div class="grid gap-2 text-sm">
-                  <span class="font-medium">Direction</span>
+                  <span class="font-bold">Direction</span>
                   <Select.Root
                     bind:value={
                       () => String(info?.direction ?? 0),
@@ -553,8 +553,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
               }}
             />
             <div class="grid content-start gap-3">
-              <span class="text-sm font-medium">Fill with the brush colour</span
-              >
+              <span class="text-sm font-bold">Fill with the brush colour</span>
               <div class="flex flex-wrap gap-2">
                 <Button onclick={() => fill("all")} size="sm" variant="outline">
                   <PaintBucketIcon /> All keys

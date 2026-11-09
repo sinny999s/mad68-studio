@@ -56,7 +56,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
           >
             <Icon class="size-6" />
             <div class="grid text-left text-sm text-wrap">
-              <span class="font-medium">{title}</span>
+              <span class="font-bold">{title}</span>
               <span class="font-normal text-muted-foreground">
                 {description}
               </span>

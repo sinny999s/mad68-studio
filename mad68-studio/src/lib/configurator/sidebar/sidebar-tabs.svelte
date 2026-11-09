@@ -35,6 +35,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
               <Sidebar.MenuButton
                 isActive={tab === value}
                 tooltipContent={label}
+                class="h-9 font-semibold text-sidebar-foreground data-[active=true]:font-bold data-[active=true]:[&>svg]:text-sidebar-primary"
                 {...props}
               >
                 <Icon />

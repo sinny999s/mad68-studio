@@ -57,6 +57,10 @@ this program. If not, see <https://www.gnu.org/licenses/>.
           class="relative"
           style={unitToStyle(displayLayout.width, displayLayout.height)}
         >
+          <!-- The keyboard case behind the keycaps -->
+          <div
+            class="pointer-events-none absolute -inset-[0.45em] rounded-[0.7em] border border-case-edge bg-case shadow-[0_1.2em_2.4em_-1em_rgb(0_0_0/0.55),inset_0_1px_0_rgb(255_255_255/0.05)]"
+          ></div>
           {#each displayLayout.displayKeys as { key, w, h, x, y }, i (i)}
             <div class="absolute p-0.5" style={unitToStyle(w, h, x, y)}>
               {@render keyGenerator?.(key)}

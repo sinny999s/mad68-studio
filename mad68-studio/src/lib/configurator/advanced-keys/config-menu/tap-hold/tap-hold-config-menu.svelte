@@ -40,7 +40,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
 <FixedScrollArea class="flex flex-col gap-4 p-4 pt-0">
   <div class="grid text-sm">
-    <span class="font-medium">Configure Tap-Hold Bindings</span>
+    <span class="font-bold">Configure Tap-Hold Bindings</span>
     <span class="text-muted-foreground">
       Assign bindings for tap and hold actions of the key.
     </span>

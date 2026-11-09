@@ -123,11 +123,11 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   <FixedScrollArea class="flex flex-col gap-4 p-4">
     <KeyTester.Root>
       <div class="flex flex-col gap-2">
-        <div class="text-sm font-medium">Pressed Keys</div>
+        <div class="text-sm font-bold">Pressed Keys</div>
         <KeyTester.Press class="h-32 w-full" />
       </div>
       <div class="flex flex-col gap-2">
-        <div class="text-sm font-medium">Released Keys</div>
+        <div class="text-sm font-bold">Released Keys</div>
         <KeyTester.Release class="h-32 w-full" />
       </div>
     </KeyTester.Root>

@@ -21,7 +21,11 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   import { Tabs } from "bits-ui"
   import type { ComponentProps } from "svelte"
   import { globalStateContext } from "./context.svelte"
-  import { MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH } from "./lib/layout"
+  import {
+    MIN_WINDOW_HEIGHT,
+    MIN_WINDOW_WIDTH,
+    sidebarTabGroups,
+  } from "./lib/layout"
   import ProfileSelect from "./profile-select.svelte"
   import ConfiguratorSidebar from "./sidebar/sidebar.svelte"
 
@@ -29,6 +33,12 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     $props()
 
   const globalState = globalStateContext.get()
+
+  const tabLabel = $derived(
+    sidebarTabGroups
+      .flatMap((g) => g.tabs)
+      .find((t) => t.value === globalState.tab)?.label ?? "",
+  )
 
   let innerWidth = $state(Infinity)
   let innerHeight = $state(Infinity)
@@ -52,11 +62,12 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     <Sidebar.Provider {...props}>
       <ConfiguratorSidebar />
       <Sidebar.Inset>
-        <header class="flex h-14 shrink-0 items-center gap-4 px-4">
-          <div class="flex flex-1 items-center gap-2">
-            <Sidebar.Trigger class="-ml-1" />
+        <header class="flex h-16 shrink-0 items-center gap-4 px-4">
+          <div class="flex flex-1 items-center gap-3">
+            <Sidebar.Trigger class="-ml-1 text-muted-foreground" />
+            <h1 class="text-xl font-extrabold tracking-tight">{tabLabel}</h1>
             <Sidebar.Separator
-              class="mr-2 data-[orientation=vertical]:h-4"
+              class="mx-1 data-[orientation=vertical]:h-5"
               orientation="vertical"
             />
             <ProfileSelect />

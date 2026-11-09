@@ -129,7 +129,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
     {#if runningRule && settings.enabled}
       <div class="rounded-md bg-primary/10 px-3 py-2 text-sm" role="status">
-        <span class="font-medium">{runningRule.name}</span> is running: using
+        <span class="font-bold">{runningRule.name}</span> is running: using
         Profile
         {runningRule.profile}.
       </div>
@@ -201,7 +201,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
         </Popover.Trigger>
         <Popover.Content align="start" class="w-96 p-0">
           <div class="flex items-center justify-between border-b px-3 py-2">
-            <span class="text-sm font-medium">Open programs</span>
+            <span class="text-sm font-bold">Open programs</span>
             <Button
               aria-label="Refresh the list"
               disabled={loadingApps}

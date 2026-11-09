@@ -36,7 +36,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
 <FixedScrollArea class="flex flex-col gap-4 p-4 pt-0">
   <div class="grid text-sm text-wrap">
-    <span class="font-medium">Configure Null Bind Resolution Behavior</span>
+    <span class="font-bold">Configure Null Bind Resolution Behavior</span>
     <span class="text-muted-foreground">
       Select how Null Bind resolves key presses when both keys are pressed
       simultaneously.

@@ -18,7 +18,7 @@
 <div class={cn("grid grid-cols-[minmax(0,1fr)_28rem]", className)} {...props}>
   <FixedScrollArea class="flex flex-col gap-4 p-6 pt-2 pr-4">
     <div class="grid text-sm">
-      <span class="font-medium">Configure Analog Curve</span>
+      <span class="font-bold">Configure Analog Curve</span>
       <span class="text-muted-foreground">
         Modify how keyboard analog values translate to gamepad analog inputs.
         You can manually adjust the analog curve or select a preset from below.

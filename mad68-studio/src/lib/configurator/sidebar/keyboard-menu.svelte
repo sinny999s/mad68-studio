@@ -47,11 +47,15 @@ this program. If not, see <https://www.gnu.org/licenses/>.
             >
               <KeyboardIcon class="size-4" />
             </div>
-            <div class="grid flex-1 text-left text-sm leading-tight">
-              <span class="truncate font-medium">{name}</span>
-              <span class="truncate font-mono text-xs">
-                {displayUInt16(vendorId)}
-                {displayUInt16(productId)}
+            <div class="grid flex-1 gap-0.5 text-left text-sm leading-tight">
+              <span class="truncate font-bold">{name}</span>
+              <span
+                class="flex items-center gap-1.5 truncate text-xs text-muted-foreground"
+              >
+                <span
+                  class="size-1.5 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_6px_var(--color-emerald-400)]"
+                ></span>
+                {demo ? "Demo keyboard" : "Connected"}
               </span>
             </div>
             <ChevronsUpDownIcon class="ml-auto" />
@@ -62,6 +66,13 @@ this program. If not, see <https://www.gnu.org/licenses/>.
         align="start"
         class="w-(--bits-dropdown-menu-anchor-width) min-w-56 rounded-lg"
       >
+        <DropdownMenu.Label
+          class="font-mono text-xs font-normal text-muted-foreground"
+        >
+          USB {displayUInt16(vendorId)}
+          {displayUInt16(productId)}
+        </DropdownMenu.Label>
+        <DropdownMenu.Separator />
         {#if demo}
           <DropdownMenu.Item class="gap-2 p-2">
             {#snippet child({ props })}

@@ -82,7 +82,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   <FixedScrollArea class="flex flex-col gap-4 p-6 pt-2 pr-4">
     <div class="grid gap-2 text-sm">
       <div class="grid">
-        <span class="font-medium">Quick Setup</span>
+        <span class="font-bold">Quick Setup</span>
         <span class="text-muted-foreground">
           Bind a ready-made layout to this profile in one click.
         </span>
@@ -110,7 +110,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
       </div>
     </div>
     <div class="grid text-sm">
-      <span class="font-medium">Configure Controller Bindings</span>
+      <span class="font-bold">Configure Controller Bindings</span>
       <span class="text-muted-foreground">
         Select a key on the keyboard above, then pick what it does on the
         controller. Right-click a key to unbind it.

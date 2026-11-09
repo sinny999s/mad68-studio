@@ -53,7 +53,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
 <div class={cn("flex flex-col", className)} {...props}>
   <div class={cn("grid text-sm text-wrap", disabled && "opacity-50")}>
-    <span class="font-medium">
+    <span class="font-bold">
       {title}: {display?.(value) ?? value}
     </span>
     {#if description}

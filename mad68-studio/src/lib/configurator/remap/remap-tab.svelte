@@ -33,7 +33,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   </KeyboardEditor.Pane>
   <KeyboardEditor.Handle />
   <KeyboardEditor.Pane>
-    <KeyboardEditor.Container>
+    <KeyboardEditor.Container card>
       <RemapMenu />
     </KeyboardEditor.Container>
   </KeyboardEditor.Pane>
