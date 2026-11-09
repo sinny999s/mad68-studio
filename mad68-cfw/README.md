@@ -411,7 +411,9 @@ profiles per game.
 1. If the keyboard comes up as `373B:2024` (no typing), it is in the vendor
    bootloader: flash `firmware/MAD68HE_RGB_v1.06.bin` (stock) or a fixed build
    through hub.fgg.com.cn's manual upgrade, or just replug to retry the app.
-2. If it does nothing at all: unplug, hold Esc, plug in, then flash stock.
+2. If it does nothing at all, press Fn+Ins (custom firmware), or start the
+   update from MadLions' updater (stock firmware). Holding Esc while plugging
+   in does **not** enter update mode on this keyboard.
 3. Last resort: an ST-Link on the SWD pads (PA13/PA14) can reflash anything.
 
 Your stock settings are untouched in flash sectors 1-2 and come back as soon as

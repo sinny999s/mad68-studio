@@ -34,8 +34,15 @@ export const MADLIONS_VID = 0x373b
 export const STOCK_PID = 0x1058
 export const BOOTLOADER_PID = 0x2024
 export const CUSTOM_PID = 0x1f58
+export const QMK_PID = 0x1f59
 const HMK_USAGE_PAGE = 0xffab
 const HMK_COMMAND_BOOTLOADER = 2
+// The QMK build (mad68-qmk) takes a VIA custom value on its own channel as its
+// update-mode request: set value, channel 0, value 'M', "BOOT". QMK's raw HID
+// interface is usage page 0xFF60, usage 0x61, 32-byte reports.
+const QMK_USAGE_PAGE = 0xff60
+const QMK_USAGE = 0x61
+const QMK_UPDATE_MODE_REQUEST = [0x07, 0x00, 0x4d, 0x42, 0x4f, 0x4f, 0x54]
 // The bootloader exposes more than one HID interface; the update channel is
 // the vendor collection the official tool filters for (usage page 0xFF,
 // usage 1). Another interface streams input reports on its own, which look
@@ -51,16 +58,17 @@ const PIECE = 54
 const APP_BASE = 0x08020000
 const APP_MAX = 128 * 1024
 const CUSTOM_VERSION = 0x0f01
+const QMK_VERSION = 0x0f02
 
 export type FirmwareImage = {
   name: string
   data: Uint8Array
   version: number
   bodyLength: number
-  kind: "custom" | "stock"
+  kind: "custom" | "qmk" | "stock"
 }
 
-export type KeyboardMode = "custom" | "stock" | "bootloader" | "none"
+export type KeyboardMode = "custom" | "qmk" | "stock" | "bootloader" | "none"
 
 function be16(d: Uint8Array, o: number) {
   return (d[o] << 8) | d[o + 1]
@@ -74,6 +82,7 @@ function le32(d: Uint8Array, o: number) {
 
 export function displayFirmwareVersion(version: number) {
   if (version === CUSTOM_VERSION) return "custom (libhmk)"
+  if (version === QMK_VERSION) return "QMK"
   const hex = version.toString(16).padStart(4, "0")
   return `v${parseInt(hex.slice(0, 2), 10)}.${hex.slice(2)}`
 }
@@ -120,7 +129,12 @@ export function parseFirmware(name: string, data: Uint8Array): FirmwareImage {
     data,
     version,
     bodyLength,
-    kind: version === CUSTOM_VERSION ? "custom" : "stock",
+    kind:
+      version === CUSTOM_VERSION
+        ? "custom"
+        : version === QMK_VERSION
+          ? "qmk"
+          : "stock",
   }
 }
 
@@ -166,6 +180,7 @@ export async function detectKeyboardMode(): Promise<KeyboardMode> {
   }
   if (devices.some((d) => d.productId === BOOTLOADER_PID)) return "bootloader"
   if (devices.some((d) => d.productId === CUSTOM_PID)) return "custom"
+  if (devices.some((d) => d.productId === QMK_PID)) return "qmk"
   if (devices.some((d) => d.productId === STOCK_PID)) return "stock"
   return "none"
 }
@@ -182,6 +197,24 @@ export async function customFirmwareToBootloader() {
   const report = new Uint8Array(REPORT)
   report[0] = HMK_COMMAND_BOOTLOADER
   // The keyboard drops off the bus immediately; a failed send is expected
+  await device.sendReport(0, report).catch(() => undefined)
+  await device.close().catch(() => undefined)
+}
+
+/** Ask the QMK build to restart into the vendor bootloader. */
+export async function qmkFirmwareToBootloader() {
+  const device = (await madlionsDevices()).find(
+    (d) =>
+      d.productId === QMK_PID &&
+      d.collections.some(
+        (c) => c.usagePage === QMK_USAGE_PAGE && c.usage === QMK_USAGE,
+      ),
+  )
+  if (!device) throw new Error("QMK firmware not found.")
+  if (!device.opened) await device.open()
+  const report = new Uint8Array(32)
+  report.set(QMK_UPDATE_MODE_REQUEST)
+  // It answers, then restarts about 50 ms later
   await device.sendReport(0, report).catch(() => undefined)
   await device.close().catch(() => undefined)
 }
@@ -236,18 +269,34 @@ export async function waitForBootloader(
 export async function waitForRestart(
   expectedPid: number,
   timeoutMs: number,
-): Promise<"restarted" | "still-updating" | "missing"> {
-  const end = Date.now() + timeoutMs
+): Promise<"restarted" | "still-updating" | "came-back" | "missing"> {
+  const start = Date.now()
+  const end = start + timeoutMs
   let sawBootloader = true
+  // The bootloader leaving and coming back means the new firmware started
+  // but went back to update mode (its fail-safe, e.g. no USB connection)
+  let leftBootloader = false
+  let last = ""
   while (Date.now() < end) {
     const pids = (await madlionsDevices()).map((d) => d.productId)
+    const seen =
+      [...new Set(pids)]
+        .map((p) => p.toString(16))
+        .sort()
+        .join(", ") || "nothing"
+    if (seen !== last) {
+      trace(`after ${Date.now() - start} ms: ${seen}`)
+      last = seen
+    }
     if (pids.includes(expectedPid) && !pids.includes(BOOTLOADER_PID)) {
       return "restarted"
     }
     sawBootloader = pids.includes(BOOTLOADER_PID)
+    if (!sawBootloader) leftBootloader = true
     await sleep(300)
   }
-  return sawBootloader ? "still-updating" : "missing"
+  if (sawBootloader) return leftBootloader ? "came-back" : "still-updating"
+  return "missing"
 }
 
 type Report = Uint8Array<ArrayBuffer>
@@ -394,8 +443,10 @@ export async function flashFirmware(
   }
 }
 
-export const HOLD_ESC_INSTRUCTIONS =
-  "Unplug the keyboard, hold Esc, plug it back in, then let go of Esc."
+// Holding Esc while plugging in does not enter update mode on this keyboard
+// (except with the QMK build, which checks for it itself)
+export const MANUAL_UPDATE_MODE_INSTRUCTIONS =
+  "With the custom firmware, press Fn+Ins to switch it to update mode. With the QMK firmware, press Fn+Ins, or unplug the keyboard and hold Esc while plugging it back in. With the stock firmware, start the update from MadLions' own updater."
 
 export type InstallEvents = {
   onStatus: (status: string) => void
@@ -414,22 +465,24 @@ export async function installFirmware(image: FirmwareImage, ev: InstallEvents) {
   const current = await detectKeyboardMode()
   let device: HIDDevice | null = null
 
-  if (current === "custom") {
+  if (current === "custom" || current === "qmk") {
     ev.onStatus("Restarting the keyboard into update mode...")
     // The firmware restarts without answering, so look for the bootloader
     // straight away instead of waiting for the command to time out
-    void (ev.enterBootloader ?? customFirmwareToBootloader)().catch(
-      () => undefined,
-    )
+    const request =
+      current === "qmk"
+        ? qmkFirmwareToBootloader
+        : (ev.enterBootloader ?? customFirmwareToBootloader)
+    void request().catch(() => undefined)
     device = await waitForBootloader(10000, isCancelled)
   }
   if (!device && !isCancelled()) {
-    if (current === "custom") {
+    if (current === "custom" || current === "qmk") {
       ev.onStatus(
-        `The keyboard did not restart by itself. ${HOLD_ESC_INSTRUCTIONS}`,
+        `The keyboard did not restart by itself. ${MANUAL_UPDATE_MODE_INSTRUCTIONS}`,
       )
     } else if (current !== "bootloader") {
-      ev.onStatus(HOLD_ESC_INSTRUCTIONS)
+      ev.onStatus(MANUAL_UPDATE_MODE_INSTRUCTIONS)
     }
     device = await waitForBootloader(120000, isCancelled)
   }
@@ -452,9 +505,18 @@ export async function installFirmware(image: FirmwareImage, ev: InstallEvents) {
   // Only a keyboard that comes back on the new firmware counts as success
   ev.onStatus("Waiting for the keyboard to restart...")
   const outcome = await waitForRestart(
-    image.kind === "custom" ? CUSTOM_PID : STOCK_PID,
+    image.kind === "custom"
+      ? CUSTOM_PID
+      : image.kind === "qmk"
+        ? QMK_PID
+        : STOCK_PID,
     15000,
   )
+  if (outcome === "came-back") {
+    throw new Error(
+      "The new firmware started but did not connect over USB, so the keyboard went back to update mode by itself.",
+    )
+  }
   if (outcome === "still-updating") {
     throw new Error(
       "The keyboard did not restart after the update, so the new firmware was not applied.",

@@ -7,7 +7,7 @@ wrapped in Electron, with MAD68-specific additions.
 
 ## Run it
 
-Start `release/MAD68-Studio-0.4.1-portable.exe` (also copied to the Desktop as `MAD68 Studio.exe`). It needs no install.
+Start `release/MAD68-Studio-0.4.2-portable.exe` (also copied to the Desktop as `MAD68 Studio.exe`). It needs no install.
 
 - Windows SmartScreen may warn because the exe is not code-signed. Choose
   **More info, then Run anyway**.
@@ -76,12 +76,19 @@ Plus MAD68-specific pages:
 - **Lighting keycodes** in the Remap picker: `RGB Toggle`, `Next/Prev Effect`,
   `Hue +/-`, `Brightness +/-` and `Speed +/-` (keycodes `0xD5` to `0xDD`).
 - **Firmware** (Settings, or the Firmware button on the start screen):
-  - Install the bundled custom firmware (v6.1) or restore stock v1.06, or install any
+  - Install the bundled custom firmware (v7.1) or restore stock v1.06, or install any
     MAD68 HE RGB upgrade file.
+  - A QMK build for this keyboard (USB ID `373B:1F59`, upgrade files with
+    header version `0x0F02`) is recognised too. From QMK the install button
+    restarts the keyboard into update mode itself, by sending the QMK build's
+    update-mode request (a VIA custom value, `07 00 4D "BOOT"`, on QMK's raw
+    HID interface). The keyboard settings pages need the libhmk firmware.
   - Files are checked before anything is erased: IDs, length, trailer checksum,
     stack pointer and entry point.
   - From the custom firmware the app restarts the keyboard into update mode by
-    itself. From stock it asks you to unplug, hold Esc and plug back in.
+    itself. From stock, start the update from MadLions' updater first
+    (holding Esc while plugging in does not enter update mode on this
+    keyboard).
   - It uses the same bootloader protocol as hub.fgg.com.cn: the "DuckBread"
     sector upgrade (`AA 01` start, `AA 02` erase, `AA 03` data, `AA 96`
     finish), described in `../mad68-cfw/README.md`. The packets it generates

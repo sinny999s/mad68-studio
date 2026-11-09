@@ -18,3 +18,6 @@ __pycache__/
 Thumbs.db
 .env
 .env.*
+
+# QMK port (kept in a separate repository)
+/mad68-qmk/

@@ -30,11 +30,19 @@ because the exe is not code-signed: choose **More info**, then **Run anyway**.
 To install the custom firmware, open the app and go to **Firmware**, then
 **Install custom firmware**. The keyboard restarts by itself in a few seconds.
 
-> **Flashing firmware is at your own risk.** The keyboard's update mode is
-> never erased, so a keyboard can always be recovered:
+> **Flashing firmware is at your own risk.** The keyboard's update program is
+> never erased, and these are the ways back into update mode:
 >
-> 1. Unplug it, hold Esc, and plug it back in.
-> 2. Install the custom firmware again, or use **Restore stock** in the app.
+> - **The app:** the install button puts the keyboard into update mode by
+>   itself, on stock firmware and on this custom firmware.
+> - **On the keyboard:** with the custom firmware, press Fn+Ins.
+> - **Automatic:** if a newly installed custom build cannot connect over USB,
+>   it returns to update mode by itself within about 9 seconds.
+> - **Interrupted installs:** if an install is cut off, the keyboard stays in
+>   update mode (it won't type); run the install again.
+>
+> Holding Esc while plugging the keyboard in does **not** enter update mode on
+> this keyboard.
 
 ## What's in this repo
 

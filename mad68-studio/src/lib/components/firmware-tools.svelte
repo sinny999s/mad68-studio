@@ -55,6 +55,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   const modeLabel: Record<KeyboardMode | "checking", string> = {
     checking: "Checking...",
     custom: "Custom firmware (libhmk)",
+    qmk: "QMK firmware",
     stock: "Stock MadLions firmware",
     bootloader: "Update mode (bootloader)",
     none: "No MAD68 HE detected",
@@ -169,7 +170,9 @@ this program. If not, see <https://www.gnu.org/licenses/>.
         {#if selected}
           {selected.kind === "custom"
             ? "Custom libhmk firmware"
-            : `Stock MadLions firmware ${displayFirmwareVersion(selected.version)}`},
+            : selected.kind === "qmk"
+              ? "QMK firmware"
+              : `Stock MadLions firmware ${displayFirmwareVersion(selected.version)}`},
           {Math.round(selected.bodyLength / 1024)} KB. The keyboard will stop typing
           for about half a minute while it updates. Do not unplug it.
         {/if}
