@@ -25,6 +25,7 @@ import {
   XINPUT_BUTTONS,
   type GamepadState,
 } from "$lib/libhmk/commands/gamepad-state"
+import type { FirmwareInfo } from "$lib/libhmk/commands/firmware-info"
 import type { Rgb, RgbConfig } from "$lib/libhmk/commands/rgb"
 import { HMK_GamepadButton, type HMK_GamepadOptions } from "$lib/libhmk/gamepad"
 import { defaultMacroNode, type HMK_MacroNode } from "$lib/libhmk/macro"
@@ -84,6 +85,7 @@ function defaultProfile(profile: number): DemoKeyboardProfileState {
       gamepadOverride: false,
       squareJoystick: false,
       snappyJoystick: true,
+      lastJoystick: false,
     },
     tickRate: DEFAULT_TICK_RATE,
   }
@@ -163,7 +165,7 @@ export class DemoKeyboard implements Keyboard {
     const t = performance.now() / 1000
     const amp = on ? 26000 : 0
     return {
-      version: 2,
+      version: 3,
       interfaceEnabled: enabled,
       interfaceOpen: enabled,
       active: this.#gamepadActive,
@@ -185,6 +187,10 @@ export class DemoKeyboard implements Keyboard {
   async setActiveProfile(profile: number) {
     this.#activeProfile = profile
     return this.getGamepadState()
+  }
+  async getFirmwareInfo(): Promise<FirmwareInfo> {
+    // The demo plays the firmware this app bundles
+    return { major: 7, minor: 2, patch: 0, buildId: 0 }
   }
 
   async disconnect() {}

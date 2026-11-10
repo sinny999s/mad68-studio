@@ -33,6 +33,10 @@ interrupts, and checks:
  16. still frames (v7.1): with the lighting off, or on Solid / Custom /
      Gradient, a frame is drawn once and not again until something on it
      changes (settings, Caps Lock, Fn layer, idle fade, key colours)
+ 17. stick v7.2: last pressed wins on each stick axis (order, hand-back,
+     own depth, dead zone, both axes, Fn+G reset), snappy and cancel unchanged
+ 18. firmware info (v7.2): GET_FIRMWARE_INFO reports the release, build ID and
+     marker, and the marker is in the image for the app to read from files
 
 Usage: python verify_cfw.py <firmware.elf> <firmware raw .bin> <nm.exe> <dir with backup/ and tools/>
 """
@@ -356,6 +360,20 @@ class Cfw:
 
 
 RGB_JOURNAL = 0x08050000
+
+
+def complete_frame_after(e: 'Cfw', syms: dict, t: int, limit: int = 300) -> bool:
+    """Wait until a whole LED frame that the firmware started at or after its
+    tick `t` is in the LED buffer. The firmware draws 8 LEDs per main-loop
+    pass, which on the chip is well under a millisecond per frame but in this
+    emulator (about 50x slower) about 30 ms, so a fixed wait can land
+    mid-frame. A frame only starts once the previous one is finished, so the
+    start of the next frame means this one is complete."""
+    if not e.run_until(lambda: e.r32(syms['last_frame']) >= t, limit):
+        return False
+    e.run_until(lambda: False, 1)         # past frame_begin's frame_count++
+    k = e.r32(syms['frame_count'])
+    return e.run_until(lambda: e.r32(syms['frame_count']) > k, limit)
 
 
 def enqueue(e: 'Cfw', buf_addr: int) -> bool:
@@ -737,10 +755,12 @@ def main():
     check(cfgs and cfgs[-1][1:6] == bytes([2, 100, 200, 210, 50]), f'SET_RGB result saved to flash ({cfgs[-1][:6].hex() if cfgs else None})')
 
     lighting_v5(e, image, syms, rest, build_id, Path(sys.argv[4]), gamma, led_map, keys, kidx, command, leds, tap, FN)
-    gaming_v6(image, syms, rest, build_id, led_map, keys, kidx)
+    gamepad = gaming_v6(image, syms, rest, build_id, led_map, keys, kidx)
     restart_v61(image, syms, rest, build_id)
     lighting_v7(image, syms, rest, build_id, Path(sys.argv[4]), led_map, keys, kidx)
     still_frames_v71(image, syms, rest, build_id, led_map, keys, kidx)
+    stick_v72(gamepad, syms, kidx)
+    firmware_info_v72(image, syms, rest, build_id)
 
     print('[9] flash integrity across all runs: checked per scenario above')
     failed = [w for ok, w in results if not ok]
@@ -796,11 +816,14 @@ def lighting_v5(e, image, syms, rest, build_id, base, gamma, led_map, keys, kidx
         ok, r = command(bad)
         check(r[0] == 0xFF, f'per-key command refuses {why}')
     command([0x61, 1, 5, 0, 255, 210, 128, 2, 170, 255, 0, 0, 7, 85, 255])    # Custom, idle off
-    run(60)
+    complete_frame_after(e, syms, e.r32(syms['uwTick']))
     exp = [None] * 68
     for k in range(68):
         exp[key_to_led[k]] = tuple(gamma[v * 210 // 255] for v in want[k])
-    check(leds() == exp, 'Custom effect: every key shows its own colour through the stock gamma (brightness 210)')
+    got = leds()
+    diff = [(i, got[i], exp[i]) for i in range(68) if got[i] != exp[i]]
+    check(got == exp, 'Custom effect: every key shows its own colour through the stock gamma (brightness 210)'
+          + (f' ({len(diff)} LEDs differ, {got.count(None)} mid-write; first {diff[:3]}; tick {e.ticks})' if diff else ''))
 
     # Every effect renders
     frames, bad = [], []
@@ -1126,8 +1149,8 @@ def gaming_v6(image, syms, rest, build_id, led_map, keys, kidx):
           f'USB FIFOs: RX + 5 IN FIFOs, no overlap, inside the 1280-byte budget ({used} of 320 words used: '
           + ', '.join(f'{n} {a}-{b}' for a, b, n in spans) + ')')
     _, ver, flags, prof, nprof, live = state(e6)
-    check(ver == 2 and flags == 7 and prof == 0 and nprof == 4,
-          f'GET_GAMEPAD: protocol 2 (v6.1), interface on + opened by host + output on (flags {flags}), profile 0 of 4')
+    check(ver == 3 and flags == 7 and prof == 0 and nprof == 4,
+          f'GET_GAMEPAD: protocol 3 (v7.2), interface on + opened by host + output on (flags {flags}), profile 0 of 4')
     bad = [hex(a) for a in e6.flash_report() if not (0x08040000 <= a < 0x08080000)]
     check(not bad, f'controller setup never writes flash outside sectors 6/7 {bad}')
 
@@ -1262,6 +1285,7 @@ def gaming_v6(image, syms, rest, build_id, led_map, keys, kidx):
           f'Fn+G added once to older keymaps where Fn+G was empty ({k0:#x}), kept where it was used ({k2:#x}), flag saved')
     bad = [hex(a) for a in e5.flash_report() if not (0x08040000 <= a < 0x08080000)]
     check(not bad, f'controller features never write flash outside sectors 6/7 {bad}')
+    return {'make': make, 'command': command, 'hold': hold, 'let_go': let_go, 'stick': stick}
 
 
 def restart_v61(image, syms, rest, build_id):
@@ -1414,7 +1438,7 @@ def lighting_v7(image, syms, rest, build_id, base, led_map, keys, kidx):
     G = (2, 5)
     g = led_of(G)
     t0 = press_until_registered(G, -900)
-    e.run_until(lambda: e.ticks >= t0 + 120, 400)
+    complete_frame_after(e, syms, e.r32(syms['uwTick']) + 120)
     mid = leds()
     release(G)
     changed = [i for i in range(68) if lum(mid[i]) > lum(before[i]) + 6]
@@ -1422,7 +1446,9 @@ def lighting_v7(image, syms, rest, build_id, base, led_map, keys, kidx):
     far_on_row = [i for i in changed if abs(led_y[i] - led_y[g]) < 8 and abs(led_x[i] - led_x[g]) >= 28]
     check(changed and len(on_lines) == len(changed) and far_on_row,
           f'Reactive Cross: pressing G lights only its row and column ({len(changed)} keys, '
-          f'{len(changed) - len(on_lines)} off the lines, {len(far_on_row)} at least 2 keys along the row)')
+          f'{len(changed) - len(on_lines)} off the lines, {len(far_on_row)} at least 2 keys along the row'
+          + (f'; lit {[(i, led_x[i] - led_x[g], led_y[i] - led_y[g]) for i in changed]}, '
+             f'{e.ticks - t0} ms after the press' if not far_on_row else '') + ')')
 
     # Ripple: a deeper press sends the ring further (brighter at the same age)
     def ring_energy(delta):
@@ -1544,6 +1570,218 @@ def still_frames_v71(image, syms, rest, build_id, led_map, keys, kidx):
     n = draws_over(300)
     check(n >= 68 * (frames() - f0 - 1) and frames() > f0 + 3,
           f'Rainbow Wave still draws every frame ({n} LED writes over {frames() - f0} frames)')
+
+
+def stick_v72(gamepad, syms, kidx):
+    """[17] Last pressed wins on the controller stick (v7.2)."""
+    print('[17] stick v7.2 (last pressed wins; cancel and snappy unchanged)')
+    make, command, hold, let_go, stick = (gamepad[k] for k in ('make', 'command', 'hold', 'let_go', 'stick'))
+    W, A_, S, D = (1, 2), (2, 1), (2, 2), (2, 3)
+    GP = {'LS_UP': 16, 'LS_DOWN': 17, 'LS_LEFT': 18, 'LS_RIGHT': 19}
+    SET_OPTIONS, SET_GP_BUTTONS, GET_GP_OPTIONS, SET_GP_OPTIONS = 10, 137, 138, 139
+    GET_GAMEPAD, SET_GAMEPAD_ACTIVE = 0x64, 0x65
+    LINEAR = [4, 20, 85, 95, 165, 170, 255, 255]
+    KEYBOARD, OVERRIDE, SNAPPY, LAST = 1, 2, 8, 16
+    FULL = 255 << 7
+
+    e, sent = make(True)
+    command(e, [SET_OPTIONS, 5, 0])
+    for rc, b in ((W, 'LS_UP'), (S, 'LS_DOWN'), (A_, 'LS_LEFT'), (D, 'LS_RIGHT')):
+        command(e, [SET_GP_BUTTONS, 0, kidx[rc], 1, GP[b]])
+    e.uc.mem_write(syms['endpoint_in'], bytes([0x84]))      # host opened the interface
+    e.run_until(lambda: False, 40)
+
+    def lx():
+        return stick(sent[-1])[3] if sent else 0
+
+    def ly():
+        return stick(sent[-1])[4] if sent else 0
+
+    def wait(cond, ms=400):
+        e.run_until(cond, ms)
+        e.run_until(lambda: False, 80)            # key travel settles over a few scans
+
+    def mode(flags, curve=LINEAR):
+        r = command(e, [SET_GP_OPTIONS, 0, *curve, flags])
+        e.run_until(lambda: False, 40)
+        return r[0] == SET_GP_OPTIONS
+
+    def release(*rcs):
+        for rc in rcs:
+            let_go(e, rc)
+        wait(lambda: (lx(), ly()) == (0, 0))
+
+    def distance(rc):
+        return e.r8('key_matrix', kidx[rc] * 10 + 6)
+
+    def steady(*rcs):
+        # Wait until these keys' travel stops changing (the ADC filter takes
+        # a while to settle on a part-way press)
+        prev, same = None, 0
+        for _ in range(150):
+            cur = tuple(distance(rc) for rc in rcs)
+            same = same + 1 if cur == prev else 0
+            if same >= 5:
+                break
+            prev = cur
+            e.run_until(lambda: False, 10)
+        e.run_until(lambda: False, 40)
+
+    ver = command(e, [GET_GAMEPAD])[1]
+    check(ver == 3, f'GET_GAMEPAD reports protocol 3, so the app knows this build has last pressed wins ({ver})')
+    ok = mode(KEYBOARD | OVERRIDE | LAST)
+    opts = command(e, [GET_GP_OPTIONS, 0])
+    check(ok and opts[1:9] == bytes(LINEAR) and opts[9] == KEYBOARD | OVERRIDE | LAST,
+          f'the new option (bit 4) is saved and read back with the curve ({opts[9]:#04x})')
+
+    # --- last pressed wins ---
+    hold(e, A_)
+    wait(lambda: lx() == -FULL)
+    left = lx()
+    hold(e, D)
+    wait(lambda: lx() == FULL)
+    check(left == -FULL and lx() == FULL,
+          f'A held, then D: the stick goes from full left ({left}) to full right ({lx()})')
+    let_go(e, D)
+    wait(lambda: lx() == -FULL)
+    check(lx() == -FULL, f'D let go while A is still held: back to full left ({lx()})')
+    release(A_)
+    hold(e, D)
+    wait(lambda: lx() == FULL)
+    hold(e, A_)
+    wait(lambda: lx() == -FULL)
+    check(lx() == -FULL, f'D held, then A: full left ({lx()}), so the order decides, not the side')
+    let_go(e, A_)
+    wait(lambda: lx() == FULL)
+    check(lx() == FULL, f'A let go: back to D, full right ({lx()})')
+    release(D)
+    check((lx(), ly()) == (0, 0), f'both let go: stick centred {(lx(), ly())}')
+
+    hold(e, A_)
+    wait(lambda: lx() == -FULL)
+    hold(e, D, -300)
+    wait(lambda: lx() > 0)
+    part = lx()
+    check(0 < part < FULL,
+          f'A fully held, then D part way: the stick goes right only part way ({part}), at D\'s own depth')
+    release(A_, D)
+
+    hold(e, W)
+    hold(e, A_)
+    steady(W, A_)
+    hold(e, D)
+    steady(W, A_, D)
+    x, y = lx(), ly()
+    check(x > 0 and y > 0 and abs(x - y) < 600 and 22000 < y < 24000,
+          f'W+A held, then D: diagonal up-right on a round stick ({x}, {y})')
+    hold(e, S)
+    steady(W, A_, S, D)
+    check(lx() > 0 and ly() < 0, f'then S as well: the up/down axis follows the last press too, down-right {(lx(), ly())}')
+    release(W, A_, S, D)
+
+    # A light touch inside the curve's start dead zone does not take over
+    hold(e, D, -300)
+    steady(D)
+    light = distance(D)
+    release(D)
+    start = min(light + 10, 220)
+    curve = [start, 0, start + 15, 120, start + 30, 200, 255, 255]
+    mode(KEYBOARD | OVERRIDE | LAST, curve)
+    hold(e, A_)
+    wait(lambda: lx() == -FULL)
+    hold(e, D, -300)
+    steady(A_, D)
+    touched, light = lx(), distance(D)
+    hold(e, D)
+    wait(lambda: lx() == FULL)
+    check(light <= start and touched == -FULL and lx() == FULL,
+          f'with the dead zone at {start}: D touched to {light} keeps A in charge ({touched}), '
+          f'pressing D past it takes over ({lx()})')
+    release(A_, D)
+
+    # Turning controller output off and on forgets the order
+    mode(KEYBOARD | OVERRIDE | LAST)
+    hold(e, A_)
+    hold(e, D)
+    wait(lambda: lx() == FULL)
+    command(e, [SET_GAMEPAD_ACTIVE, 0])
+    e.run_until(lambda: False, 40)
+    check(lx() == 0, f'controller output off with A and D held: stick centred ({lx()})')
+    command(e, [SET_GAMEPAD_ACTIVE, 1])
+    wait(lambda: lx() != 0)
+    check(abs(lx()) == FULL, f'back on with both still held: one side wins fully, no stuck half state ({lx()})')
+    release(A_, D)
+
+    # Both options set: last pressed wins takes precedence
+    mode(KEYBOARD | OVERRIDE | SNAPPY | LAST)
+    hold(e, A_)
+    wait(lambda: lx() == -FULL)
+    hold(e, D)
+    wait(lambda: lx() == FULL)
+    check(lx() == FULL, f'snappy and last pressed wins both set: last pressed wins ({lx()})')
+    release(A_, D)
+
+    # --- the other two modes are unchanged ---
+    mode(KEYBOARD | OVERRIDE | SNAPPY)
+    hold(e, A_)
+    wait(lambda: lx() == -FULL)
+    hold(e, D)
+    wait(lambda: False, 200)
+    tie = lx()
+    let_go(e, A_)
+    wait(lambda: lx() == FULL)
+    check(tie == -FULL and lx() == FULL,
+          f'snappy (as before): both fully held is a tie that points left ({tie}); A let go: right ({lx()})')
+    release(D)
+    hold(e, A_)
+    wait(lambda: lx() == -FULL)
+    hold(e, D, -300)
+    wait(lambda: False, 200)
+    check(lx() == -FULL, f'snappy (as before): the deeper key wins, A full beats D part way ({lx()})')
+    release(A_, D)
+
+    mode(KEYBOARD | OVERRIDE)
+    hold(e, A_)
+    wait(lambda: lx() == -FULL)
+    hold(e, D)
+    wait(lambda: lx() == 0)
+    check(lx() == 0, f'neither option (as before): A and D fully held cancel out ({lx()})')
+    release(A_, D)
+
+    bad = [hex(a) for a in e.flash_report() if not (0x08040000 <= a < 0x08080000)]
+    check(not bad, f'no flash changed outside sectors 6/7 {bad}')
+
+
+def firmware_info_v72(image, syms, rest, build_id):
+    """[18] GET_FIRMWARE_INFO and the release marker (v7.2)."""
+    print('[18] firmware info v7.2 (release, build ID, marker in the image)')
+    GET_FIRMWARE_INFO, MARKER = 0x67, b'MAD68CFW v7.2.0'
+    e = Cfw(image, syms, rest, journal=struct.pack('<I', build_id))
+    e.stub_usb_host()
+    e.run_until(lambda: e.r8('baseline_ready') == 1 and e.p.regs.get(OTG + 0x18, 0) != 0, 3000)
+    e.run_until(lambda: False, 120)
+
+    def command(payload):
+        scratch = (syms['_ebss'] + 0x100) & ~3
+        e.uc.mem_write(scratch, bytes(payload) + bytes(64 - len(payload)))
+        e.uc.mem_write(syms['out_buf'], bytes([0]) + bytes([0xAA]) * 63)   # junk the reply must clear
+        enqueue(e, scratch)
+        e.run_until(lambda: e.uc.mem_read(syms['out_buf'], 1)[0] != 0, 400)
+        return bytes(e.uc.mem_read(syms['out_buf'], 64))
+
+    r = command([GET_FIRMWARE_INFO])
+    bid = struct.unpack_from('<I', r, 4)[0]
+    check(r[0] == GET_FIRMWARE_INFO and tuple(r[1:4]) == (7, 2, 0),
+          f'GET_FIRMWARE_INFO reports release 7.2.0 ({tuple(r[1:4])}, reply {r[0]:#x})')
+    check(bid == build_id, f'and the ID of this build ({bid:#010x} vs {build_id:#010x})')
+    check(r[8:32] == MARKER + bytes(24 - len(MARKER)),
+          f'and the marker, zero-padded over whatever was in the buffer ({r[8:32]!r})')
+    check(image.count(MARKER + bytes(1)) == 1,
+          f'the marker is in the image exactly once, so the app can read the release from a file ({image.count(MARKER)})')
+    r = command([0x68])
+    check(r[0] == 0xFF, f'the next unused board command (0x68) is still refused ({r[0]:#x})')
+    bad = [hex(a) for a in e.flash_report() if not (0x08040000 <= a < 0x08080000)]
+    check(not bad, f'no flash changed outside sectors 6/7 {bad}')
 
 
 def check_handoff(e: Cfw):

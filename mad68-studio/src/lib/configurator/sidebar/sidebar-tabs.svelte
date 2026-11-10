@@ -15,6 +15,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script lang="ts">
   import * as Sidebar from "$lib/components/ui/sidebar"
+  import { updates } from "$lib/updates.svelte"
   import { Tabs } from "bits-ui"
   import { globalStateContext } from "../context.svelte"
   import { sidebarTabGroups } from "../lib/layout"
@@ -40,6 +41,12 @@ this program. If not, see <https://www.gnu.org/licenses/>.
               >
                 <Icon />
                 <span>{label}</span>
+                {#if value === "firmware" && updates.firmwareOutdated}
+                  <span
+                    class="ml-auto size-2 shrink-0 rounded-full bg-primary"
+                    title="Firmware update available"
+                  ></span>
+                {/if}
               </Sidebar.MenuButton>
             {/snippet}
           </Tabs.Trigger>

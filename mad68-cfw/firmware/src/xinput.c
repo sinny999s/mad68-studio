@@ -112,6 +112,14 @@ static uint16_t analog_states[10];
 // Access analog states using the button index
 #define ANALOG_STATE(button) analog_states[(button) - GP_BUTTON_LS_UP]
 
+// Last-pressed-wins (v7.2): for each joystick axis (lx, ly, rx, ry), the side
+// pressed most recently, and which sides were held on the previous scan. It is
+// tracked on every scan, so switching the option on mid-press uses the real
+// press order.
+enum { AXIS_NONE = 0, AXIS_NEG, AXIS_POS };
+static uint8_t axis_last[4];
+static bool axis_held[4][2];
+
 static xinput_report_t report = {.report_size = sizeof(xinput_report_t)};
 
 // Controller output switch (SP_GAMEPAD_TOG). RAM only: it starts on after
@@ -128,6 +136,8 @@ void xinput_release_all(void) {
   memset(key_press_states, 0, sizeof(key_press_states));
   report.buttons = 0;
   memset(analog_states, 0, sizeof(analog_states));
+  memset(axis_last, 0, sizeof(axis_last));
+  memset(axis_held, 0, sizeof(axis_held));
 }
 
 void xinput_set_active(bool active) {
@@ -188,20 +198,56 @@ void xinput_task(void) {
 
   // lx, ly, rx, ry
   uint16_t joystick_states[4] = {0};
+  // Whether each axis points to its positive side
+  bool axis_positive[4];
+  // A side counts as held once it is past the start dead zone of the analog
+  // curve; below that it does not move the stick anyway.
+  const uint8_t held_above = CURRENT_PROFILE.gamepad_options.analog_curve[0][0];
 
   // Combine joystick axes based on the configuration
   for (uint32_t i = 0; i < 4; i++) {
     const uint8_t neg_axis = joystick_axes[i][0];
     const uint8_t pos_axis = joystick_axes[i][1];
+    const uint16_t neg = ANALOG_STATE(neg_axis);
+    const uint16_t pos = ANALOG_STATE(pos_axis);
 
-    if (CURRENT_PROFILE.gamepad_options.snappy_joystick)
-      // For snappy joystick, we use the maximum value of opposite axes.
-      joystick_states[i] =
-          M_MAX(ANALOG_STATE(neg_axis), ANALOG_STATE(pos_axis));
+    // Track the press order (every scan, whatever the option)
+    const bool neg_held = neg > held_above, pos_held = pos > held_above;
+    const bool neg_new = neg_held && !axis_held[i][0];
+    const bool pos_new = pos_held && !axis_held[i][1];
+    if (neg_new && pos_new)
+      // Both sides pressed on the same scan: the deeper one wins
+      axis_last[i] = pos > neg ? AXIS_POS : AXIS_NEG;
+    else if (neg_new)
+      axis_last[i] = AXIS_NEG;
+    else if (pos_new)
+      axis_last[i] = AXIS_POS;
+    // The side that won was let go: hand over to the other side if it is
+    // still held
+    if (axis_last[i] == AXIS_NEG && !neg_held)
+      axis_last[i] = pos_held ? AXIS_POS : AXIS_NONE;
+    else if (axis_last[i] == AXIS_POS && !pos_held)
+      axis_last[i] = neg_held ? AXIS_NEG : AXIS_NONE;
+    axis_held[i][0] = neg_held;
+    axis_held[i][1] = pos_held;
+
+    if (CURRENT_PROFILE.gamepad_options.last_joystick &&
+        axis_last[i] != AXIS_NONE) {
+      // Last pressed wins: only that side counts, at its own depth
+      axis_positive[i] = axis_last[i] == AXIS_POS;
+      joystick_states[i] = axis_positive[i] ? pos : neg;
+      continue;
+    }
+
+    axis_positive[i] = pos > neg;
+    if (CURRENT_PROFILE.gamepad_options.snappy_joystick ||
+        CURRENT_PROFILE.gamepad_options.last_joystick)
+      // For snappy joystick, we use the maximum value of opposite axes. Last
+      // pressed wins does the same while neither side is past the dead zone.
+      joystick_states[i] = M_MAX(neg, pos);
     else
       // Otherwise, we combine the opposite axes.
-      joystick_states[i] =
-          abs((int16_t)ANALOG_STATE(pos_axis) - ANALOG_STATE(neg_axis));
+      joystick_states[i] = abs((int16_t)pos - neg);
   }
 
   // Apply the analog curve to joystick states
@@ -250,13 +296,11 @@ void xinput_task(void) {
 
   // Update joystick states in the report
   for (uint32_t i = 0; i < 4; i++) {
-    const uint8_t neg_axis = joystick_axes[i][0];
-    const uint8_t pos_axis = joystick_axes[i][1];
     // Scale range from [0, 255] to [0, 32767]
     const int16_t joystick_state = joystick_states[i] << 7;
 
     // Assign signed joystick values to the report
-    if (ANALOG_STATE(pos_axis) > ANALOG_STATE(neg_axis))
+    if (axis_positive[i])
       // Positive axis
       report.joysticks[i] = joystick_state;
     else

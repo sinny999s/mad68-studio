@@ -292,8 +292,12 @@ typedef struct __attribute__((packed)) {
       // Whether to use the maximum value of opposite axes for the joystick
       // output instead of combining them
       bool snappy_joystick : 1;
+      // MAD68 v7.2: when both sides of a joystick axis are held, the side
+      // pressed last wins (its own depth sets the tilt). Takes precedence
+      // over `snappy_joystick`.
+      bool last_joystick : 1;
       // Reserved bits for future use
-      uint8_t reserved : 4;
+      uint8_t reserved : 3;
     };
     uint8_t options;
   };

@@ -15,6 +15,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script lang="ts">
   import { keyboardContext, type Keyboard } from "$lib/keyboard"
+  import { updates } from "$lib/updates.svelte"
   import { Tabs } from "bits-ui"
   import {
     globalStateContext,
@@ -49,6 +50,12 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   $effect(() => {
     analogInfoQuery.enabled =
       globalState.tab === "performance" || globalState.tab === "calibration"
+  })
+
+  // Which custom firmware the keyboard runs, for the update notice
+  $effect(() => {
+    updates.checkKeyboard(keyboard)
+    return () => updates.forgetKeyboard()
   })
 </script>
 

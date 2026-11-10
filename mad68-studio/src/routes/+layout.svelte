@@ -18,9 +18,15 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   import "../app.css"
   import "@fontsource-variable/nunito-sans/wght.css"
   import "@fontsource-variable/geist-mono/wght.css"
+  import { updates } from "$lib/updates.svelte"
   import { ModeWatcher } from "mode-watcher"
 
   let { children } = $props()
+
+  // Once per start of the desktop app: is there a newer MAD68 Studio?
+  $effect(() => {
+    updates.checkApp()
+  })
 </script>
 
 <svelte:head>

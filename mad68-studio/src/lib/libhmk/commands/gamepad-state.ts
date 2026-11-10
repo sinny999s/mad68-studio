@@ -88,6 +88,14 @@ export function restartReturnsToApp(state: GamepadState | null) {
   return !!state && state.version >= 2
 }
 
+/**
+ * Whether the firmware has "last pressed wins" for the stick (custom firmware
+ * v7.2, controller protocol 3). Older firmware ignores the option.
+ */
+export function hasLastPressedStick(state: GamepadState | null) {
+  return !!state && state.version >= 3
+}
+
 /** null when the firmware has no controller commands (before v6) */
 export async function getGamepadState(
   commander: Commander,

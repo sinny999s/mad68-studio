@@ -13,6 +13,8 @@
  * this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+import { findFirmwareMarker, type Release } from "./release"
+
 // Firmware updates for the MadLions MAD68 HE through its vendor IAP bootloader.
 //
 // The protocol is the official configurator's "DuckBread" sector upgrade
@@ -66,6 +68,8 @@ export type FirmwareImage = {
   version: number
   bodyLength: number
   kind: "custom" | "qmk" | "stock"
+  /** Custom firmware release (from v7.2); null for older builds and others */
+  release: Release | null
 }
 
 export type KeyboardMode = "custom" | "qmk" | "stock" | "bootloader" | "none"
@@ -135,6 +139,10 @@ export function parseFirmware(name: string, data: Uint8Array): FirmwareImage {
         : version === QMK_VERSION
           ? "qmk"
           : "stock",
+    release:
+      version === CUSTOM_VERSION
+        ? findFirmwareMarker(data.subarray(HEADER, HEADER + bodyLength))
+        : null,
   }
 }
 

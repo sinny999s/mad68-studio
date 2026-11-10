@@ -17,6 +17,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   import FirmwareTools from "$lib/components/firmware-tools.svelte"
   import FixedScrollArea from "$lib/components/fixed-scroll-area.svelte"
   import { keyboardContext } from "$lib/keyboard"
+  import { describeInstalled, updates } from "$lib/updates.svelte"
   import { cn, displayVersion, type WithoutChildren } from "$lib/utils"
   import type { HTMLAttributes } from "svelte/elements"
 
@@ -37,7 +38,11 @@ this program. If not, see <https://www.gnu.org/licenses/>.
       <div class="grid gap-1 text-sm">
         <span class="text-base font-bold">{keyboard.metadata.name}</span>
         <span class="text-muted-foreground">
-          libhmk firmware {displayVersion(keyboard.version)}
+          <span class="inline-block first-letter:uppercase">
+            {updates.installed
+              ? `${describeInstalled(updates.installed)} · `
+              : ""}libhmk {displayVersion(keyboard.version)}
+          </span>
           {keyboard.demo ? "(demo keyboard)" : ""}
         </span>
       </div>

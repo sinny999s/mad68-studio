@@ -37,6 +37,7 @@ import {
 } from "$lib/libhmk/commands/calibration"
 import { factoryReset } from "$lib/libhmk/commands/factory-reset"
 import { firmwareVersion } from "$lib/libhmk/commands/firmware-version"
+import { getFirmwareInfo } from "$lib/libhmk/commands/firmware-info"
 import {
   getGamepadButtons,
   setGamepadButtons,
@@ -247,6 +248,9 @@ class HMKKeyboard implements Keyboard {
   }
   setActiveProfile(profile: number) {
     return setActiveProfile(this.commander, profile)
+  }
+  getFirmwareInfo() {
+    return getFirmwareInfo(this.commander)
   }
 }
 

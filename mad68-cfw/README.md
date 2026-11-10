@@ -4,10 +4,12 @@ Custom firmware for the **MadLions MAD68 HE RGB** (stock USB ID `373B:1058`,
 bootloader `373B:2024`), built on [libhmk](https://github.com/peppapighs/libhmk)
 and configured with [hmkconf](https://hmkconf.com) in the browser.
 
-> Status: **v7 runs on the real keyboard**: 19 lighting effects, the
-> controller and restarts from the app all work. **v7.1** stops redrawing the
-> lighting while it is off or showing a still picture. It passes the
-> emulation suite and is waiting for its first hardware test.
+> Status: **v7.1 runs on the real keyboard**: 19 lighting effects, the
+> controller and restarts from the app all work, and the lighting is not
+> redrawn while it is off or showing a still picture. **v7.2** adds "last
+> pressed wins" for the controller stick and reports its release number to
+> MAD68 Studio. It passes the emulation suite and is waiting for its first
+> hardware test.
 
 ## What was recovered from the stock firmware
 
@@ -139,7 +141,10 @@ resting sensor values and checks GPIO/clock/ADC/USB setup against stock, the
 scan order, key presses in both magnet polarities, Fn+Ins, both fail-safe
 paths, a HardFault, and that no flash outside sectors 6/7 changes.
 
-Latest run (build `0xc890e275`, `out/MAD68HE_libhmk_v7.1.bin`, log `out/verify_v71.log`): **199/199 passed**.
+Latest run (build `0xe59ec365`, `out/MAD68HE_libhmk_v7.2.bin`, log `out/verify_v72.log`): **223/223 passed**.
+The same suite on a rebuild of v7.1 fails only the new v7.2 stick, protocol and
+firmware info checks (`out/verify_v72_baseline_v71.log`), so they really detect
+the new behaviour.
 
 Two rules the test harness follows:
 
@@ -186,6 +191,23 @@ about 50 emulated ms there, against under 1 ms on the keyboard.
   - Solid is drawn once, and a brightness change redraws it.
   - Holding Fn still shows the layer keys.
   - Rainbow Wave still draws every frame.
+- **v7.2 stick (last pressed wins):**
+  - A held, then D: full left, then full right; D let go: back to full left.
+  - D held, then A: left, so the order decides, not the side.
+  - A full, then D part way: right, only part way (D's own depth).
+  - Both axes follow their own last press (W+A then D: round up-right diagonal; then S: down-right).
+  - A touch that stays inside the curve's start dead zone does not take over; pressing past it does.
+  - Fn+G off and on with both keys held: centred, then one side fully (no half state).
+  - With both options set, last pressed wins takes precedence.
+  - Snappy (deeper wins, a full tie points left) and cancel-out behave exactly as before.
+- **v7.2 firmware info:** GET_FIRMWARE_INFO reports 7.2.0, this build's ID and the
+  marker string; the marker is in the image exactly once; 0x68 is still refused.
+
+The lighting checks that look at a moment in an animation wait for a whole
+frame drawn after that moment (`complete_frame_after`). The firmware draws 8
+LEDs per main-loop pass, which takes well under a millisecond per frame on the
+chip but about 30 ms in the emulator, so reading the LEDs at a fixed time could
+land mid-frame and depend on how long the main loop happens to be.
 
 | Area | Result |
 |---|---|
@@ -397,14 +419,38 @@ added once to Fn+G where that key is still transparent.
 
 | Command | Request | Reply |
 |---|---|---|
-| `0x64` GET_GAMEPAD | none | version (1); flags: bit 0 interface enabled, bit 1 opened by the host, bit 2 output on; current profile; profile count; then the live state: buttons (LE16), left and right trigger (0-255), left X/Y and right X/Y (LE int16) |
+| `0x64` GET_GAMEPAD | none | version (1 = v6, 2 = v6.1, 3 = v7.2); flags: bit 0 interface enabled, bit 1 opened by the host, bit 2 output on; current profile; profile count; then the live state: buttons (LE16), left and right trigger (0-255), left X/Y and right X/Y (LE int16) |
 | `0x65` SET_GAMEPAD_ACTIVE | `0` off / `1` on | same as GET_GAMEPAD |
 | `0x66` SET_PROFILE | profile | same as GET_GAMEPAD, after switching as the profile keys do |
+| `0x67` GET_FIRMWARE_INFO (v7.2) | none | major, minor, patch of the custom firmware release; build ID (LE32); the marker string `MAD68CFW v7.2.0`, zero-padded to 24 bytes |
 
 Invalid values are refused and change nothing. SET_PROFILE to the profile that
-is already active writes no flash. Firmware before v6 answers these as unknown
+is already active writes no flash. libhmk's own `FIRMWARE_VERSION` stays at
+upstream's protocol number (v1.8) so hmkconf keeps working; the custom release
+is only in GET_FIRMWARE_INFO and in the marker, which MAD68 Studio reads from
+upgrade files to show which release a file holds. Firmware before v6 answers these as unknown
 commands. MAD68 Studio uses them for the live controller view and for switching
 profiles per game.
+
+### Opposite directions on the stick (v7.2)
+
+When both keys of one stick axis are held (A and D, or W and S), one of three
+rules decides what the stick does. It is set per profile in the gamepad
+options byte:
+
+| Bits | Rule | Stick |
+|---|---|---|
+| neither | Cancel out | the two depths subtract, so two full presses centre it |
+| bit 3 `snappy_joystick` | Deeper key wins | the deeper key's direction and depth; a full tie points left or down |
+| bit 4 `last_joystick` (v7.2) | Last pressed wins | the key pressed most recently, at its own depth; letting it go hands back to the other key if that one is still held |
+
+A key counts as pressed for this once it is past the start dead zone of the
+analog curve, so a light touch that doesn't move the stick doesn't take over
+either. The press order is tracked every scan and forgotten when controller
+output is switched off or on. Bit 4 takes precedence over bit 3. MAD68 Studio
+sets both for "Last Pressed Wins", so firmware before v7.2 (which ignores bit 4)
+falls back to deeper key wins. Studio offers the option only when GET_GAMEPAD
+reports version 3.
 
 ## Recovery
 

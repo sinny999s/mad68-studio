@@ -59,9 +59,22 @@ Plus MAD68-specific pages:
   - **Quick Setup**: WASD stick, Racing (W throttle, S brake, A/D steer) and
     Arrow camera in one click, found by what the keys do on layer 0. Gamepad
     Override is switched on with them, so the keys do not also type.
+  - **Opposite Directions** (Analog tab): what the stick does when both keys
+    of one direction pair are held, like A and D: **Last Pressed Wins** (the
+    newest key takes over, at its own depth, like Null Bind's Last Pressed),
+    **Deeper Key Wins** (formerly Snappy Joystick) or **Cancel Out**. Last
+    Pressed Wins needs custom firmware v7.2.
   - **Test** tab: live sticks, triggers and buttons as games receive them,
     read from the keyboard 20 times a second, plus the controller's state
     (off, waiting for Windows, output off, or working).
+- **Updates:**
+  - The Firmware page shows which custom firmware the keyboard runs (v7.2 and
+    later report it; older builds show as "v7.1 or older") and which one the
+    app installs. When the keyboard's is older, the page offers **Update to
+    v7.2**, and a dot on Firmware and a note in the sidebar point to it.
+  - The desktop app checks GitHub once per start for a newer MAD68 Studio
+    release and links to it. It asks GitHub's public API for the latest
+    release of this repository and sends nothing else; offline it stays quiet.
 - **Profiles for Games** (Profiles page, desktop app):
   - List games, picked from the open programs or typed as `game.exe`, each
     with a profile. While one runs, the keyboard switches to its profile, and
@@ -76,7 +89,7 @@ Plus MAD68-specific pages:
 - **Lighting keycodes** in the Remap picker: `RGB Toggle`, `Next/Prev Effect`,
   `Hue +/-`, `Brightness +/-` and `Speed +/-` (keycodes `0xD5` to `0xDD`).
 - **Firmware** (Settings, or the Firmware button on the start screen):
-  - Install the bundled custom firmware (v7.1) or restore stock v1.06, or install any
+  - Install the bundled custom firmware (v7.2) or restore stock v1.06, or install any
     MAD68 HE RGB upgrade file.
   - A QMK build for this keyboard (USB ID `373B:1F59`, upgrade files with
     header version `0x0F02`) is recognised too. From QMK the install button

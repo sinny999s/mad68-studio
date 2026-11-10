@@ -17,6 +17,7 @@ import type { HMK_Calibration, HMK_Options } from "$lib/libhmk"
 import type { HMK_Actuation } from "$lib/libhmk/actuation"
 import type { HMK_AdvancedKey } from "$lib/libhmk/advanced-keys"
 import type { HMK_AnalogInfo } from "$lib/libhmk/commands"
+import type { FirmwareInfo } from "$lib/libhmk/commands/firmware-info"
 import type { GamepadState } from "$lib/libhmk/commands/gamepad-state"
 import type { Rgb, RgbConfig, RgbInfo } from "$lib/libhmk/commands/rgb"
 import type { HMK_GamepadOptions } from "$lib/libhmk/gamepad"
@@ -109,6 +110,8 @@ export type KeyboardAction = {
   setGamepadActive(active: boolean): Promise<GamepadState>
   /** Make a profile the keyboard's active one (firmware v6) */
   setActiveProfile(profile: number): Promise<GamepadState>
+  /** Custom firmware release; null before v7.2 */
+  getFirmwareInfo(): Promise<FirmwareInfo | null>
 }
 
 export type Keyboard = KeyboardState & KeyboardAction

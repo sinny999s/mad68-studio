@@ -61,6 +61,9 @@ export const hmkGamepadOptionsSchema = z.object({
   gamepadOverride: z.boolean(),
   squareJoystick: z.boolean(),
   snappyJoystick: z.boolean(),
+  // MAD68 firmware v7.2: the last pressed side of a stick axis wins. Older
+  // firmware ignores it, and older saved configs don't have it.
+  lastJoystick: z.boolean().default(false),
 })
 
 export type HMK_GamepadOptions = z.infer<typeof hmkGamepadOptionsSchema>

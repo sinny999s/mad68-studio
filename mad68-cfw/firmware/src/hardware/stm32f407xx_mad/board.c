@@ -257,6 +257,21 @@ _Static_assert((uint32_t)FIRMWARE_BUILD_ID != 0xFFFFFFFFu &&
 __attribute__((used)) const volatile uint32_t board_firmware_build_id =
     (uint32_t)FIRMWARE_BUILD_ID;
 
+// MAD68 custom firmware release. Separate from libhmk's FIRMWARE_VERSION,
+// which is the protocol version hmkconf checks and stays at upstream's value.
+// Reported by GET_FIRMWARE_INFO, and embedded in the image as a marker that
+// MAD68 Studio reads from upgrade files to tell which release a file holds.
+#define MAD68_CFW_MAJOR 7
+#define MAD68_CFW_MINOR 2
+#define MAD68_CFW_PATCH 0
+#define MAD68_STR_(x) #x
+#define MAD68_STR(x) MAD68_STR_(x)
+#define MAD68_CFW_MARKER                                                       \
+  "MAD68CFW v" MAD68_STR(MAD68_CFW_MAJOR) "." MAD68_STR(                       \
+      MAD68_CFW_MINOR) "." MAD68_STR(MAD68_CFW_PATCH)
+__attribute__((used)) const char board_firmware_marker[] = MAD68_CFW_MARKER;
+_Static_assert(sizeof(board_firmware_marker) <= 24, "marker fits the reply");
+
 static volatile bool failsafe_armed = false;
 static volatile bool failsafe_triggered = false;
 static volatile uint32_t mounted_since = 0;
@@ -502,7 +517,8 @@ void board_rgb_store(uint32_t type, const uint8_t *payload, uint32_t len) {
 //
 // GET_GAMEPAD (0x64): no arguments. Reply:
 //   [1] protocol version: 1 = v6, 2 = v6.1 (COMMAND_REBOOT returns to the
-//       app; on v6 it leaves the keyboard in update mode)
+//       app; on v6 it leaves the keyboard in update mode), 3 = v7.2 (the
+//       `last_joystick` gamepad option: last pressed side of an axis wins)
 //   [2] flags: bit 0 controller interface enabled in the settings,
 //       bit 1 interface opened by the host, bit 2 controller output on
 //   [3] current profile  [4] profile count
@@ -512,10 +528,15 @@ void board_rgb_store(uint32_t type, const uint8_t *payload, uint32_t len) {
 //   Replies like GET_GAMEPAD. Not saved: output is on after every power-up.
 // SET_PROFILE (0x66): [1] profile. Switches like the profile keys do (saved,
 //   advanced keys reloaded). Replies like GET_GAMEPAD.
+// GET_FIRMWARE_INFO (0x67, v7.2): no arguments. Reply: [1] major [2] minor
+//   [3] patch of the MAD68 custom firmware release, [4..7] build ID (LE32),
+//   [8..31] the marker string ("MAD68CFW v7.2.0"), zero-padded. Firmware
+//   before v7.2 answers it as an unknown command.
 #define BOARD_COMMAND_GET_GAMEPAD 0x64
 #define BOARD_COMMAND_SET_GAMEPAD_ACTIVE 0x65
 #define BOARD_COMMAND_SET_PROFILE 0x66
-#define GAMEPAD_PROTOCOL_VERSION 2
+#define BOARD_COMMAND_GET_FIRMWARE_INFO 0x67
+#define GAMEPAD_PROTOCOL_VERSION 3
 
 static void gamepad_fill_response(uint8_t *out) {
   const xinput_report_t *r = xinput_get_report();
@@ -555,8 +576,24 @@ void board_rgb_keycode(uint8_t keycode) { rgb_keycode(keycode); }
 void board_host_leds(uint8_t leds) { rgb_host_leds(leds); }
 #endif
 
+static void firmware_info_response(uint8_t *out) {
+  const uint32_t id = board_firmware_build_id;
+  memset(out + 1, 0, 31);
+  out[1] = MAD68_CFW_MAJOR;
+  out[2] = MAD68_CFW_MINOR;
+  out[3] = MAD68_CFW_PATCH;
+  out[4] = (uint8_t)id;
+  out[5] = (uint8_t)(id >> 8);
+  out[6] = (uint8_t)(id >> 16);
+  out[7] = (uint8_t)(id >> 24);
+  memcpy(out + 8, board_firmware_marker, sizeof(board_firmware_marker));
+}
+
 bool board_command(const uint8_t *in, uint8_t *out) {
   switch (in[0]) {
+  case BOARD_COMMAND_GET_FIRMWARE_INFO:
+    firmware_info_response(out);
+    return true;
   case BOARD_COMMAND_GET_GAMEPAD:
   case BOARD_COMMAND_SET_GAMEPAD_ACTIVE:
   case BOARD_COMMAND_SET_PROFILE:

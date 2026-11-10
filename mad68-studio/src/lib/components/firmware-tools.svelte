@@ -15,6 +15,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script lang="ts">
   import {
+    ArrowUpCircleIcon,
     FileUpIcon,
     RefreshCwIcon,
     RotateCcwIcon,
@@ -31,6 +32,12 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     type FirmwareImage,
     type KeyboardMode,
   } from "$lib/flasher"
+  import { formatFirmwareRelease } from "$lib/release"
+  import {
+    BUNDLED_CUSTOM_FIRMWARE,
+    describeInstalled,
+    updates,
+  } from "$lib/updates.svelte"
   import { cn } from "$lib/utils"
   import { toast } from "svelte-sonner"
 
@@ -43,10 +50,9 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     enterBootloader?: () => Promise<void>
   } = $props()
 
-  const BUNDLED_CUSTOM = "/firmware/MAD68HE_libhmk.bin"
   const BUNDLED_STOCK = "/firmware/MAD68HE_RGB_v1.06.bin"
 
-  let mode: KeyboardMode | "checking" = $state("checking")
+  let mode = $state<KeyboardMode | "checking">("checking")
   let selected: FirmwareImage | null = $state(null)
   let confirmOpen = $state(false)
   const busy = $derived(flashSession.busy)
@@ -59,6 +65,27 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     stock: "Stock MadLions firmware",
     bootloader: "Update mode (bootloader)",
     none: "No MAD68 HE detected",
+  }
+
+  // Which custom firmware this app installs, and whether the connected
+  // keyboard (when the configurator has it open) runs an older one
+  $effect(() => {
+    updates.loadBundled()
+  })
+  const bundled = $derived(
+    updates.bundled ? formatFirmwareRelease(updates.bundled) : null,
+  )
+  const installed = $derived(
+    mode === "custom" && updates.installed
+      ? describeInstalled(updates.installed)
+      : null,
+  )
+  const outdated = $derived(mode === "custom" && updates.firmwareOutdated)
+
+  function installBundled() {
+    choose(() =>
+      loadBundledFirmware(BUNDLED_CUSTOM_FIRMWARE, "MAD68HE_libhmk.bin"),
+    )
   }
 
   async function refresh() {
@@ -108,12 +135,31 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   <div class="flex items-center justify-between gap-4 rounded-md border p-3">
     <div class="grid text-sm">
       <span class="font-semibold">Keyboard</span>
-      <span class="text-muted-foreground">{modeLabel[mode]}</span>
+      <span class="text-muted-foreground first-letter:uppercase">
+        {installed ?? modeLabel[mode]}
+      </span>
     </div>
     <Button disabled={busy} onclick={refresh} size="sm" variant="outline">
       <RefreshCwIcon /> Refresh
     </Button>
   </div>
+
+  {#if outdated && bundled}
+    <div
+      class="flex flex-wrap items-center justify-between gap-3 rounded-md border border-primary/50 bg-primary/10 p-3"
+    >
+      <div class="grid text-sm">
+        <span class="font-semibold">Firmware update available</span>
+        <span class="text-muted-foreground">
+          Your keyboard has {installed}. This app has {bundled}, and updating
+          keeps your settings.
+        </span>
+      </div>
+      <Button disabled={busy} onclick={installBundled} size="sm">
+        <ArrowUpCircleIcon /> Update to {bundled}
+      </Button>
+    </div>
+  {/if}
 
   <div class="grid gap-2 text-sm">
     <span class="font-semibold">Install firmware</span>
@@ -127,11 +173,11 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   <div class="flex flex-wrap gap-2">
     <Button
       disabled={busy}
-      onclick={() =>
-        choose(() => loadBundledFirmware(BUNDLED_CUSTOM, "MAD68HE_libhmk.bin"))}
+      onclick={installBundled}
       size="sm"
+      variant={outdated ? "outline" : "default"}
     >
-      <ZapIcon /> Install custom firmware
+      <ZapIcon /> Install custom firmware{bundled ? ` ${bundled}` : ""}
     </Button>
     <Button
       disabled={busy}
@@ -169,7 +215,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
       <Dialog.Description>
         {#if selected}
           {selected.kind === "custom"
-            ? "Custom libhmk firmware"
+            ? `Custom libhmk firmware${selected.release ? ` ${formatFirmwareRelease(selected.release)}` : ""}`
             : selected.kind === "qmk"
               ? "QMK firmware"
               : `Stock MadLions firmware ${displayFirmwareVersion(selected.version)}`},

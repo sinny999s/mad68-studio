@@ -45,6 +45,7 @@ export async function getGamepadOptions(
     gamepadOverride: ((optionsRaw >> 1) & 1) !== 0,
     squareJoystick: ((optionsRaw >> 2) & 1) !== 0,
     snappyJoystick: ((optionsRaw >> 3) & 1) !== 0,
+    lastJoystick: ((optionsRaw >> 4) & 1) !== 0,
   }
 }
 
@@ -58,6 +59,7 @@ export async function setGamepadOptions(
       gamepadOverride,
       squareJoystick,
       snappyJoystick,
+      lastJoystick,
     },
   }: SetGamepadOptionsParams,
 ) {
@@ -69,7 +71,8 @@ export async function setGamepadOptions(
       ((keyboardEnabled ? 1 : 0) << 0) |
         ((gamepadOverride ? 1 : 0) << 1) |
         ((squareJoystick ? 1 : 0) << 2) |
-        ((snappyJoystick ? 1 : 0) << 3),
+        ((snappyJoystick ? 1 : 0) << 3) |
+        ((lastJoystick ? 1 : 0) << 4),
     ],
   })
 }
