@@ -21,6 +21,29 @@ endorsed by MadLions.
   mode. Every build is checked in an emulator before release, and the stock
   firmware is one click away.
 
+## Which keyboards
+
+The original **MAD68 HE** family. MadLions' own firmware for these boards is
+one program with a few per-board presets, and it sets up the hardware
+identically on all of them (checked by comparing every published firmware
+file and running them in the emulator), so the same custom firmware runs on
+each:
+
+| Board | USB ID | Status |
+|---|---|---|
+| MAD68 HE **RGB** | `373B:1058` | Tested, in daily use |
+| MAD68 HE **Lightless** | `373B:1057` | Supported, not yet tested on a real board |
+| MAD68 HE **Ultra** | `373B:1059` | Supported, not yet tested on a real board |
+| MAD68 HE **Limit** | `373B:105A` or `373B:105C` | Supported, not yet tested on a real board |
+
+MAD68 Studio recognises each board and restores the right stock firmware for
+it. Your board's USB ID is in Device Manager: Keyboard > Properties > Details
+> Hardware Ids.
+
+**Not supported:** the MAD68 HE V2 (a newer platform with different
+firmware), and the MAD68 R and MAD68 Pro, which use a different kind of
+processor (RISC-V). MAD68 Studio doesn't offer to install on them.
+
 ## Download
 
 Get `MAD68-Studio-<version>-portable.exe` from

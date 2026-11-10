@@ -8,6 +8,13 @@ MadLions, in its upgrade-file format:
 - `MAD68HE_RGB_v1.05.bin`
 - `MAD68HE_RGB_v1.06.bin`
 
+And v1.06 for the other boards of the family, for restoring them:
+
+- `MAD68HE_Lightless_v1.06.bin` (MAD68 HE Lightless, `373B:1057`)
+- `MAD68HE_Ultra-Limit_v1.06.bin` (MAD68 HE Ultra `373B:1059` and both Limit
+  editions `373B:105A` / `373B:105C`: MadLions publishes one file for all
+  three)
+
 They are © MadLions / Shenzhen Yizhita Technology Co., Ltd. They are **not**
 covered by this repository's GPL-3.0 licence, and are included only:
 

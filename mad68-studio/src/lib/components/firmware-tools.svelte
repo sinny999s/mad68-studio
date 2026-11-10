@@ -25,10 +25,13 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   import * as Dialog from "$lib/components/ui/dialog"
   import { flashSession } from "$lib/flash-session.svelte"
   import {
-    detectKeyboardMode,
+    BOARDS,
+    DEFAULT_BOARD,
+    detectKeyboard,
     displayFirmwareVersion,
     loadBundledFirmware,
     parseFirmware,
+    type Board,
     type FirmwareImage,
     type KeyboardMode,
   } from "$lib/flasher"
@@ -50,9 +53,30 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     enterBootloader?: () => Promise<void>
   } = $props()
 
-  const BUNDLED_STOCK = "/firmware/MAD68HE_RGB_v1.06.bin"
-
   let mode = $state<KeyboardMode | "checking">("checking")
+  // Which MAD68 HE board, when its USB ID shows it (stock firmware and update
+  // mode; the custom firmware is the same on every board)
+  let board = $state<Board | null>(null)
+  const boardFor = (image: FirmwareImage) =>
+    BOARDS.find((b) => b.stockGroup === image.stockGroup)?.name.replace(
+      /^MAD68 HE (Ultra|Limit)$/,
+      "MAD68 HE Ultra and Limit",
+    )
+
+  // Restore stock: the right file for the board is picked once the keyboard
+  // is in update mode, where its board shows
+  async function stockForThisBoard() {
+    const target = board ?? DEFAULT_BOARD
+    const image = await loadBundledFirmware(
+      `/firmware/${target.stockFile}`,
+      target.stockFile,
+    )
+    return {
+      ...image,
+      name: board ? target.stockFile : "stock firmware v1.06 for this board",
+      autoStock: true,
+    }
+  }
   let selected: FirmwareImage | null = $state(null)
   let confirmOpen = $state(false)
   const busy = $derived(flashSession.busy)
@@ -90,7 +114,9 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
   async function refresh() {
     mode = "checking"
-    mode = await detectKeyboardMode()
+    const found = await detectKeyboard()
+    mode = found.mode
+    board = found.board
   }
 
   $effect(() => {
@@ -136,7 +162,9 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     <div class="grid text-sm">
       <span class="font-semibold">Keyboard</span>
       <span class="text-muted-foreground first-letter:uppercase">
-        {installed ?? modeLabel[mode]}
+        {installed ?? modeLabel[mode]}{board && !installed
+          ? ` (${board.name})`
+          : ""}
       </span>
     </div>
     <Button disabled={busy} onclick={refresh} size="sm" variant="outline">
@@ -181,10 +209,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     </Button>
     <Button
       disabled={busy}
-      onclick={() =>
-        choose(() =>
-          loadBundledFirmware(BUNDLED_STOCK, "MAD68HE_RGB_v1.06.bin"),
-        )}
+      onclick={() => choose(stockForThisBoard)}
       size="sm"
       variant="outline"
     >
@@ -218,7 +243,9 @@ this program. If not, see <https://www.gnu.org/licenses/>.
             ? `Custom libhmk firmware${selected.release ? ` ${formatFirmwareRelease(selected.release)}` : ""}`
             : selected.kind === "qmk"
               ? "QMK firmware"
-              : `Stock MadLions firmware ${displayFirmwareVersion(selected.version)}`},
+              : selected.autoStock
+                ? `Stock MadLions firmware ${displayFirmwareVersion(selected.version)}${board ? ` for the ${board.name}` : ", picked for your board (Lightless, RGB, Ultra or Limit) once it is in update mode"}`
+                : `Stock MadLions firmware ${displayFirmwareVersion(selected.version)} for the ${boardFor(selected) ?? "MAD68 HE"}`},
           {Math.round(selected.bodyLength / 1024)} KB. The keyboard will stop typing
           for about half a minute while it updates. Do not unplug it.
         {/if}

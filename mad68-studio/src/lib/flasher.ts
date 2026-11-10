@@ -19,7 +19,7 @@ import { findFirmwareMarker, type Release } from "./release"
 //
 // The protocol is the official configurator's "DuckBread" sector upgrade
 // (hub.fgg.com.cn), confirmed against a capture of a working official install.
-// 64-byte HID reports sent as report 0 to the bootloader (373B:2024, usage page
+// 64-byte HID reports sent as report 0 to the bootloader (373B:2023-2027 by board, usage page
 // 0xFF / usage 1); byte 63 of every report is the OR of bytes 0..62, and each
 // report is echoed back as its acknowledgement:
 //   AA 01 <pages u32 BE> <0x08020000 BE>     start (2 KB pages)
@@ -33,9 +33,68 @@ import { findFirmwareMarker, type Release } from "./release"
 // The upgrade file is checked here exactly like tools/pack.py checks it.
 
 export const MADLIONS_VID = 0x373b
-export const STOCK_PID = 0x1058
-export const BOOTLOADER_PID = 0x2024
 export const CUSTOM_PID = 0x1f58
+
+/**
+ * The original MAD68 HE family. MadLions' own firmware for these is the same
+ * program with a few per-board presets, and they set up the hardware
+ * identically, so the custom firmware runs on all of them. Each has its own
+ * USB ID and update-mode ID. Ultra and both Limit editions share one stock
+ * file (its header carries the 0x105C Limit's IDs).
+ */
+export type Board = {
+  name: string
+  appPid: number
+  bootPid: number
+  /** Bundled stock firmware for restoring this board */
+  stockFile: string
+  /** Boards whose stock files are interchangeable with this one */
+  stockGroup: "lightless" | "rgb" | "ultra-limit"
+}
+export const BOARDS: Board[] = [
+  {
+    name: "MAD68 HE Lightless",
+    appPid: 0x1057,
+    bootPid: 0x2023,
+    stockFile: "MAD68HE_Lightless_v1.06.bin",
+    stockGroup: "lightless",
+  },
+  {
+    name: "MAD68 HE RGB",
+    appPid: 0x1058,
+    bootPid: 0x2024,
+    stockFile: "MAD68HE_RGB_v1.06.bin",
+    stockGroup: "rgb",
+  },
+  {
+    name: "MAD68 HE Ultra",
+    appPid: 0x1059,
+    bootPid: 0x2025,
+    stockFile: "MAD68HE_Ultra-Limit_v1.06.bin",
+    stockGroup: "ultra-limit",
+  },
+  {
+    name: "MAD68 HE Limit",
+    appPid: 0x105a,
+    bootPid: 0x2026,
+    stockFile: "MAD68HE_Ultra-Limit_v1.06.bin",
+    stockGroup: "ultra-limit",
+  },
+  {
+    name: "MAD68 HE Limit",
+    appPid: 0x105c,
+    bootPid: 0x2027,
+    stockFile: "MAD68HE_Ultra-Limit_v1.06.bin",
+    stockGroup: "ultra-limit",
+  },
+]
+/** The board the custom firmware's own upgrade files name in their header */
+export const DEFAULT_BOARD = BOARDS[1]
+export const boardByAppPid = (pid: number) =>
+  BOARDS.find((b) => b.appPid === pid) ?? null
+export const boardByBootPid = (pid: number) =>
+  BOARDS.find((b) => b.bootPid === pid) ?? null
+const isBootPid = (pid: number) => boardByBootPid(pid) !== null
 export const QMK_PID = 0x1f59
 const HMK_USAGE_PAGE = 0xffab
 const HMK_COMMAND_BOOTLOADER = 2
@@ -70,6 +129,13 @@ export type FirmwareImage = {
   kind: "custom" | "qmk" | "stock"
   /** Custom firmware release (from v7.2); null for older builds and others */
   release: Release | null
+  /** Stock files only: which boards the file is for */
+  stockGroup: Board["stockGroup"] | null
+  /**
+   * "Restore stock": the file is picked once the keyboard is in update mode
+   * and its board is known (from the custom firmware it can't be told apart)
+   */
+  autoStock?: boolean
 }
 
 export type KeyboardMode = "custom" | "qmk" | "stock" | "bootloader" | "none"
@@ -94,13 +160,18 @@ export function displayFirmwareVersion(version: number) {
 /** Validate a MAD68 HE upgrade file; throws with a readable reason. */
 export function parseFirmware(name: string, data: Uint8Array): FirmwareImage {
   if (data.length < HEADER + 8 + 4) throw new Error("File is too small.")
+  // The header names the board (app ID, then update-mode ID). The keyboard
+  // never sees it: only the body is sent.
+  const board = boardByAppPid(be16(data, 2))
   if (
     be16(data, 0) !== MADLIONS_VID ||
-    be16(data, 2) !== STOCK_PID ||
     be16(data, 4) !== MADLIONS_VID ||
-    be16(data, 6) !== BOOTLOADER_PID
+    !board ||
+    board.bootPid !== be16(data, 6)
   ) {
-    throw new Error("This is not a MAD68 HE RGB firmware file.")
+    throw new Error(
+      "This is not a firmware file for the MAD68 HE (Lightless, RGB, Ultra or Limit).",
+    )
   }
   const version = be16(data, 8)
   const bodyLength = be32(data, 10)
@@ -143,7 +214,19 @@ export function parseFirmware(name: string, data: Uint8Array): FirmwareImage {
       version === CUSTOM_VERSION
         ? findFirmwareMarker(data.subarray(HEADER, HEADER + bodyLength))
         : null,
+    stockGroup:
+      version === CUSTOM_VERSION || version === QMK_VERSION
+        ? null
+        : board.stockGroup,
   }
+}
+
+/** Why a stock file can't go on this board, or null if it can */
+export function stockMismatch(image: FirmwareImage, board: Board) {
+  if (image.kind !== "stock" || image.autoStock) return null
+  if (image.stockGroup === board.stockGroup) return null
+  const forBoard = BOARDS.find((b) => b.stockGroup === image.stockGroup)
+  return `This stock firmware is for the ${forBoard?.name ?? "another board"}, but your keyboard is a ${board.name}. Installing it would give the keyboard the wrong identity and settings.`
 }
 
 export async function loadBundledFirmware(path: string, name: string) {
@@ -174,6 +257,18 @@ async function madlionsDevices() {
 
 /** Which firmware the keyboard is currently running, if it is connected. */
 export async function detectKeyboardMode(): Promise<KeyboardMode> {
+  return (await detectKeyboard()).mode
+}
+
+/**
+ * The firmware the keyboard runs and, where it shows, which board it is
+ * (stock firmware and update mode use per-board USB IDs; the custom firmware
+ * and the QMK build are the same on every board).
+ */
+export async function detectKeyboard(): Promise<{
+  mode: KeyboardMode
+  board: Board | null
+}> {
   let devices = await madlionsDevices()
   if (devices.length === 0 && "hid" in navigator) {
     // The desktop app grants MadLions devices without a prompt
@@ -186,11 +281,15 @@ export async function detectKeyboardMode(): Promise<KeyboardMode> {
     }
     devices = await madlionsDevices()
   }
-  if (devices.some((d) => d.productId === BOOTLOADER_PID)) return "bootloader"
-  if (devices.some((d) => d.productId === CUSTOM_PID)) return "custom"
-  if (devices.some((d) => d.productId === QMK_PID)) return "qmk"
-  if (devices.some((d) => d.productId === STOCK_PID)) return "stock"
-  return "none"
+  const boot = devices.find((d) => isBootPid(d.productId))
+  if (boot) return { mode: "bootloader", board: boardByBootPid(boot.productId) }
+  if (devices.some((d) => d.productId === CUSTOM_PID))
+    return { mode: "custom", board: null }
+  if (devices.some((d) => d.productId === QMK_PID))
+    return { mode: "qmk", board: null }
+  const stock = devices.find((d) => boardByAppPid(d.productId))
+  if (stock) return { mode: "stock", board: boardByAppPid(stock.productId) }
+  return { mode: "none", board: null }
 }
 
 /** Ask the custom firmware to restart into the vendor bootloader. */
@@ -227,11 +326,11 @@ export async function qmkFirmwareToBootloader() {
   await device.close().catch(() => undefined)
 }
 
-/** The bootloader's update interface (not just any 373B:2024 interface). */
+/** The bootloader's update interface (not just any of its interfaces). */
 export function isBootloaderUpdateInterface(d: HIDDevice) {
   return (
     d.vendorId === MADLIONS_VID &&
-    d.productId === BOOTLOADER_PID &&
+    isBootPid(d.productId) &&
     d.collections.some(
       (c) => c.usagePage === BOOT_USAGE_PAGE && c.usage === BOOT_USAGE,
     )
@@ -249,14 +348,12 @@ export async function waitForBootloader(
     if (!device) {
       try {
         const granted = await navigator.hid.requestDevice({
-          filters: [
-            {
-              vendorId: MADLIONS_VID,
-              productId: BOOTLOADER_PID,
-              usagePage: BOOT_USAGE_PAGE,
-              usage: BOOT_USAGE,
-            },
-          ],
+          filters: BOARDS.map((b) => ({
+            vendorId: MADLIONS_VID,
+            productId: b.bootPid,
+            usagePage: BOOT_USAGE_PAGE,
+            usage: BOOT_USAGE,
+          })),
         })
         device = granted.find(isBootloaderUpdateInterface)
       } catch {
@@ -296,10 +393,10 @@ export async function waitForRestart(
       trace(`after ${Date.now() - start} ms: ${seen}`)
       last = seen
     }
-    if (pids.includes(expectedPid) && !pids.includes(BOOTLOADER_PID)) {
+    if (pids.includes(expectedPid) && !pids.some(isBootPid)) {
       return "restarted"
     }
-    sawBootloader = pids.includes(BOOTLOADER_PID)
+    sawBootloader = pids.some(isBootPid)
     if (!sawBootloader) leftBootloader = true
     await sleep(300)
   }
@@ -470,8 +567,12 @@ export type InstallEvents = {
  */
 export async function installFirmware(image: FirmwareImage, ev: InstallEvents) {
   const isCancelled = ev.isCancelled ?? (() => false)
-  const current = await detectKeyboardMode()
+  const { mode: current, board: seen } = await detectKeyboard()
   let device: HIDDevice | null = null
+
+  // Refuse a stock file for another board before touching the keyboard
+  const early = seen && stockMismatch(image, seen)
+  if (early) throw new Error(early)
 
   if (current === "custom" || current === "qmk") {
     ev.onStatus("Restarting the keyboard into update mode...")
@@ -507,6 +608,23 @@ export async function installFirmware(image: FirmwareImage, ev: InstallEvents) {
       .map(describe)
       .join(" | ")}`,
   )
+  // In update mode the board shows through its update-mode ID
+  const board = boardByBootPid(device.productId) ?? DEFAULT_BOARD
+  trace(`board: ${board.name} (${board.appPid.toString(16)})`)
+  if (image.autoStock) {
+    image = await loadBundledFirmware(
+      `/firmware/${board.stockFile}`,
+      board.stockFile,
+    )
+  }
+  const mismatch = stockMismatch(image, board)
+  if (mismatch) {
+    // Nothing was written, but the keyboard is now waiting in update mode
+    throw new Error(
+      `${mismatch} Nothing was installed. The keyboard is waiting in update mode: use Restore stock firmware or Install custom firmware to finish.`,
+    )
+  }
+
   ev.onStatus(`Installing ${image.name}. Do not unplug the keyboard.`)
   await flashFirmware(device, image, ev.onProgress)
 
@@ -517,7 +635,7 @@ export async function installFirmware(image: FirmwareImage, ev: InstallEvents) {
       ? CUSTOM_PID
       : image.kind === "qmk"
         ? QMK_PID
-        : STOCK_PID,
+        : board.appPid,
     15000,
   )
   if (outcome === "came-back") {

@@ -1,13 +1,13 @@
 # MAD68 Studio
 
-Desktop configurator for the MadLions MAD68 HE running the custom libhmk
-firmware from `../mad68-cfw`. It is a fork of
+Desktop configurator for the MadLions MAD68 HE (RGB, Lightless, Ultra and
+Limit) running the custom libhmk firmware from `../mad68-cfw`. It is a fork of
 [hmkconf](https://github.com/peppapighs/hmkconf) (the libhmk web configurator)
 wrapped in Electron, with MAD68-specific additions.
 
 ## Run it
 
-Start `release/MAD68-Studio-0.6.0-portable.exe` (also copied to the Desktop as `MAD68 Studio.exe`). It needs no install.
+Start `release/MAD68-Studio-0.8.0-portable.exe` (also copied to the Desktop as `MAD68 Studio.exe`). It needs no install.
 
 - Windows SmartScreen may warn because the exe is not code-signed. Choose
   **More info, then Run anyway**.

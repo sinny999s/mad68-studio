@@ -9,6 +9,31 @@ and configured with [hmkconf](https://hmkconf.com) in the browser.
 > from the app and the release number MAD68 Studio reads all work, and the
 > lighting is not redrawn while it is off or showing a still picture.
 
+## Other MAD68 boards
+
+Every MAD68-family firmware MadLions publishes (their update server, keyed by
+each board's USB IDs as listed in the official web configurator) was
+downloaded and compared:
+
+- **Original MAD68 HE family: one firmware, per-board presets.** Lightless
+  (`1057`), RGB (`1058`), Ultra (`1059`) and Limit (`105A`, `105C`) run the
+  same code: between Lightless and RGB v1.06, 26 of 77,800 bytes differ, and
+  Ultra and both Limits get the very same file. What differs is the USB ID,
+  a tag on saved settings (`0x115D` / `0x115E` / `0x1162`), one sensor
+  threshold (330 on RGB and Ultra, 380 on Lightless) and one default value.
+  Booted in the emulator, they leave every GPIO, ADC, DMA, timer, USB, clock
+  and LED register identical. Each has its own update-mode ID (`2023`-`2027`),
+  but the update program only ever receives the firmware body, so this
+  firmware runs on all of them unchanged; MAD68 Studio picks the IDs and the
+  stock file per board.
+- **MAD68 HE V2 and MAD LIGHT 60HE: a new platform.** Still ARM, but loaded at
+  `0x08010000` behind a different update program, with a new codebase (about
+  5% of code blocks match the RGB firmware; 49% between the two), and clock
+  registers and a GPIO port an STM32F407 doesn't have.
+- **MAD68 R and MAD68 Pro: RISC-V.** Their images start with a RISC-V jump and
+  a run of `nop`s (the start-up pattern of WCH's CH32V chips), so nothing
+  from this firmware applies.
+
 ## What was recovered from the stock firmware
 
 All of this came from the official v1.06 image running in an emulator
