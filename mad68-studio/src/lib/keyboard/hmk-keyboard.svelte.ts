@@ -68,6 +68,7 @@ import {
   setRgbKeys,
   type RgbConfig,
 } from "$lib/libhmk/commands/rgb"
+import { getScanSpeed, setScanSpeed } from "$lib/libhmk/commands/scan-speed"
 import { getSerial } from "$lib/libhmk/commands/serial"
 import { getTickRate, setTickRate } from "$lib/libhmk/commands/tick-rate"
 import { displayVersion, isWebHIDSSupported } from "$lib/utils"
@@ -251,6 +252,12 @@ class HMKKeyboard implements Keyboard {
   }
   getFirmwareInfo() {
     return getFirmwareInfo(this.commander)
+  }
+  getScanSpeed() {
+    return getScanSpeed(this.commander)
+  }
+  setScanSpeed(speed: number) {
+    return setScanSpeed(this.commander, speed)
   }
 }
 

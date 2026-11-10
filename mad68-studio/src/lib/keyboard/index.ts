@@ -20,6 +20,7 @@ import type { HMK_AnalogInfo } from "$lib/libhmk/commands"
 import type { FirmwareInfo } from "$lib/libhmk/commands/firmware-info"
 import type { GamepadState } from "$lib/libhmk/commands/gamepad-state"
 import type { Rgb, RgbConfig, RgbInfo } from "$lib/libhmk/commands/rgb"
+import type { ScanSpeedInfo } from "$lib/libhmk/commands/scan-speed"
 import type { HMK_GamepadOptions } from "$lib/libhmk/gamepad"
 import type { HMK_MacroNode } from "$lib/libhmk/macro"
 import { Context } from "runed"
@@ -112,6 +113,10 @@ export type KeyboardAction = {
   setActiveProfile(profile: number): Promise<GamepadState>
   /** Custom firmware release; null before v7.2 */
   getFirmwareInfo(): Promise<FirmwareInfo | null>
+  /** Key scan speed and measured scan rate; null before firmware v7.3 */
+  getScanSpeed(): Promise<ScanSpeedInfo | null>
+  /** Applies at once and is saved on the keyboard (firmware v7.3) */
+  setScanSpeed(speed: number): Promise<ScanSpeedInfo>
 }
 
 export type Keyboard = KeyboardState & KeyboardAction

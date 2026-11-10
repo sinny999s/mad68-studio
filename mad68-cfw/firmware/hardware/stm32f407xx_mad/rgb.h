@@ -62,15 +62,18 @@ bool rgb_command(const uint8_t *in, uint8_t *out);
                               // the controller keys after Fn+G (green on, blinking red off)
 #define RGB_IND_MASK 0x07u
 
-// Persistent lighting records kept by board.c in flash sector 6
+// Persistent records kept by board.c in flash sector 6 (lighting, and since
+// v7.3 the key scan speed). Older firmware skips types it doesn't know.
 #define RGB_REC_CONFIG 1u // rgb_config_t
 #define RGB_REC_KEYS 2u   // R, G, B per key
-#define RGB_REC_TYPES 3u  // 0 = legacy 8-byte record from firmware v4
+#define RGB_REC_SCAN 3u   // key scan speed (scan.h, v7.3)
+#define RGB_REC_TYPES 4u  // 0 = legacy 8-byte record from firmware v4
 #define RGB_REC_MAX_PAYLOAD 240u
 #define RGB_LEGACY_RECORD_SIZE 8u
 
 // Copies up to max_len bytes of the latest record of `type` (0 = legacy) and
 // returns its stored length, or 0 if there is none.
 uint32_t board_rgb_load(uint32_t type, uint8_t *payload, uint32_t max_len);
-// Appends a record of `type` (1 or 2) unless it equals the latest one.
+// Appends a record of `type` (1 to RGB_REC_TYPES - 1) unless it equals the
+// latest one.
 void board_rgb_store(uint32_t type, const uint8_t *payload, uint32_t len);

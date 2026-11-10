@@ -161,8 +161,8 @@ def main(backup_path: str, fw_dir: str) -> None:
 #define ADC_COLUMN_SCAN_MATRIX                                                 \\
   {{{', '.join(matrix_rows)}}}
 
-// Sensor settle time after switching a column on (microseconds)
-#define ADC_SAMPLE_DELAY 40
+// The sensor settle time after switching a column on is the scan speed
+// setting (hardware/stm32f407xx_mad/scan.h), not a build option.
 
 // Same per-conversion sample time as the stock firmware
 #define ADC_NUM_SAMPLE_CYCLES ADC_SAMPLETIME_28CYCLES

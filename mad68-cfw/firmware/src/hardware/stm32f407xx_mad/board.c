@@ -24,6 +24,7 @@
 
 #include "hardware/hardware.h"
 #include "rgb.h"
+#include "scan.h"
 #include "eeconfig.h"
 #include "layout.h"
 #include "xinput.h"
@@ -262,7 +263,7 @@ __attribute__((used)) const volatile uint32_t board_firmware_build_id =
 // Reported by GET_FIRMWARE_INFO, and embedded in the image as a marker that
 // MAD68 Studio reads from upgrade files to tell which release a file holds.
 #define MAD68_CFW_MAJOR 7
-#define MAD68_CFW_MINOR 2
+#define MAD68_CFW_MINOR 3
 #define MAD68_CFW_PATCH 0
 #define MAD68_STR_(x) #x
 #define MAD68_STR(x) MAD68_STR_(x)
@@ -589,11 +590,39 @@ static void firmware_info_response(uint8_t *out) {
   memcpy(out + 8, board_firmware_marker, sizeof(board_firmware_marker));
 }
 
+// GET_SCAN / SET_SCAN (v7.3), layouts in scan.h
+static void scan_response(uint8_t *out) {
+  const uint32_t rate = analog_scan_rate();
+  memset(out + 1, 0, 31);
+  out[1] = SCAN_PROTOCOL_VERSION;
+  out[2] = analog_scan_speed();
+  out[3] = SCAN_SPEED_COUNT;
+  out[4] = (uint8_t)(rate > 0xFFFFu ? 0xFFu : rate);
+  out[5] = (uint8_t)(rate > 0xFFFFu ? 0xFFu : rate >> 8);
+  out[6] = analog_baseline_busy() ? 1u : 0u;
+  for (uint8_t i = 0; i < SCAN_SPEED_COUNT; i++)
+    out[7 + i] = analog_settle_us(i);
+}
+
+static bool scan_command(const uint8_t *in, uint8_t *out) {
+  if (in[0] == BOARD_COMMAND_SET_SCAN) {
+    if (!analog_set_scan_speed(in[1]))
+      return false;
+    const uint8_t rec[SCAN_REC_SIZE] = {in[1], 0, 0, 0};
+    board_rgb_store(RGB_REC_SCAN, rec, sizeof(rec));
+  }
+  scan_response(out);
+  return true;
+}
+
 bool board_command(const uint8_t *in, uint8_t *out) {
   switch (in[0]) {
   case BOARD_COMMAND_GET_FIRMWARE_INFO:
     firmware_info_response(out);
     return true;
+  case BOARD_COMMAND_GET_SCAN:
+  case BOARD_COMMAND_SET_SCAN:
+    return scan_command(in, out);
   case BOARD_COMMAND_GET_GAMEPAD:
   case BOARD_COMMAND_SET_GAMEPAD_ACTIVE:
   case BOARD_COMMAND_SET_PROFILE:

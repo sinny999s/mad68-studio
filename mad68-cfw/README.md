@@ -8,6 +8,8 @@ and configured with [hmkconf](https://hmkconf.com) in the browser.
 > effects, the controller (with "last pressed wins" for the stick), restarts
 > from the app and the release number MAD68 Studio reads all work, and the
 > lighting is not redrawn while it is off or showing a still picture.
+> **v7.3** (key scan speed, see below) passes every emulator check and is
+> waiting for its first run on the real keyboard.
 
 ## Other MAD68 boards
 
@@ -164,10 +166,24 @@ resting sensor values and checks GPIO/clock/ADC/USB setup against stock, the
 scan order, key presses in both magnet polarities, Fn+Ins, both fail-safe
 paths, a HardFault, and that no flash outside sectors 6/7 changes.
 
-Latest run (build `0xe59ec365`, `out/MAD68HE_libhmk_v7.2.bin`, log `out/verify_v72.log`): **223/223 passed**.
-The same suite on a rebuild of v7.1 fails only the new v7.2 stick, protocol and
-firmware info checks (`out/verify_v72_baseline_v71.log`), so they really detect
-the new behaviour.
+Latest run (`out/MAD68HE_libhmk_v7.3.bin`, log `out/verify_v73.log`): **249/249 passed**.
+v7.2 (build `0xe59ec365`, log `out/verify_v72.log`) passed the 223 checks of its
+time; that suite on a rebuild of v7.1 failed only the new v7.2 stick, protocol
+and firmware info checks (`out/verify_v72_baseline_v71.log`), so they really
+detect the new behaviour.
+
+On a real keyboard running v7.3 or later (close MAD68 Studio first, as its
+traffic on the same raw-HID interface corrupts the readings):
+
+```bash
+python tools/scan_check.py            # all four scan speeds, guided key presses
+python tools/scan_check.py --speeds 0,3 --idle-only
+```
+
+It sets each scan speed, reads the rate the keyboard measures, samples every
+key with hands off (noise, deepest reading, false presses), then has you press
+Q to P (full-press reading against Relaxed, and crosstalk onto the other keys).
+The speed you had is put back at the end. Needs `pip install hidapi`.
 
 Two rules the test harness follows:
 
@@ -223,8 +239,25 @@ about 50 emulated ms there, against under 1 ms on the keyboard.
   - Fn+G off and on with both keys held: centred, then one side fully (no half state).
   - With both options set, last pressed wins takes precedence.
   - Snappy (deeper wins, a full tie points left) and cancel-out behave exactly as before.
-- **v7.2 firmware info:** GET_FIRMWARE_INFO reports 7.2.0, this build's ID and the
-  marker string; the marker is in the image exactly once; 0x68 is still refused.
+- **v7.2 firmware info:** GET_FIRMWARE_INFO reports the release (now 7.3.0), this
+  build's ID and the marker string; the marker is in the image exactly once; the
+  next unused command (0x6A) is still refused.
+- **v7.3 key scan speed:**
+  - GET_SCAN reports Standard of 4 speeds and the settle times 40/28/18/8 µs.
+  - TIM10 is one-pulse at the chosen settle (28 µs = ARR 4703 at 168 MHz); the
+    DMA stream is circular with one interrupt per 5-result sequence; the ADC
+    does one sequence per start.
+  - Every conversion is started by the TIM10 interrupt, after the column switch
+    and the settle timer.
+  - The scan rate measured with the cycle counter matches the emulated clock.
+  - SET_SCAN applies at once, is saved as a journal record, and re-captures the
+    rest values; the same speed again writes nothing; an unknown speed is
+    refused.
+  - When readings shift after a change, the rest values follow and no key reads
+    as pressed; a key held during the capture keeps its rest value.
+  - The saved speed is used after a restart.
+  - With conversions stopped, the scan is re-armed within 100 ms and carries on
+    once they work again, with no key pressed.
 
 The lighting checks that look at a moment in an animation wait for a whole
 frame drawn after that moment (`complete_frame_after`). The firmware draws 8
@@ -445,7 +478,9 @@ added once to Fn+G where that key is still transparent.
 | `0x64` GET_GAMEPAD | none | version (1 = v6, 2 = v6.1, 3 = v7.2); flags: bit 0 interface enabled, bit 1 opened by the host, bit 2 output on; current profile; profile count; then the live state: buttons (LE16), left and right trigger (0-255), left X/Y and right X/Y (LE int16) |
 | `0x65` SET_GAMEPAD_ACTIVE | `0` off / `1` on | same as GET_GAMEPAD |
 | `0x66` SET_PROFILE | profile | same as GET_GAMEPAD, after switching as the profile keys do |
-| `0x67` GET_FIRMWARE_INFO (v7.2) | none | major, minor, patch of the custom firmware release; build ID (LE32); the marker string `MAD68CFW v7.2.0`, zero-padded to 24 bytes |
+| `0x67` GET_FIRMWARE_INFO (v7.2) | none | major, minor, patch of the custom firmware release; build ID (LE32); the marker string (`MAD68CFW v7.3.0`), zero-padded to 24 bytes |
+| `0x68` GET_SCAN (v7.3) | none | see [Key scan speed](#key-scan-speed-v73) |
+| `0x69` SET_SCAN (v7.3) | speed | same as GET_SCAN, after applying and saving the speed |
 
 Invalid values are refused and change nothing. SET_PROFILE to the profile that
 is already active writes no flash. libhmk's own `FIRMWARE_VERSION` stays at
@@ -474,6 +509,68 @@ output is switched off or on. Bit 4 takes precedence over bit 3. MAD68 Studio
 sets both for "Last Pressed Wins", so firmware before v7.2 (which ignores bit 4)
 falls back to deeper key wins. Studio offers the option only when GET_GAMEPAD
 reports version 3.
+
+## Key scan speed (v7.3)
+
+The Hall sensors are read one column at a time: power the column, wait for the
+sensors to settle, convert the five rows (5 × 40 ADC cycles at 21 MHz =
+9.5 µs), move to the next of the 15 columns.
+
+**How the stock firmware does it** (v1.06, traced in the emulator): ADC1 runs
+continuously over 7 channels (vref, PB1, then the 5 rows) into a circular
+21-sample DMA buffer, and every transfer-complete interrupt switches to the
+next column. So each column gets exactly 40 µs, 600 µs per scan, about 1,670
+full scans per second, and each key's value is the average of the three passes
+in that window, including samples taken within a few µs of powering the column.
+
+**v7.2** waited 40 µs and only then converted, plus a few µs of HAL calls per
+column: about 50 µs per column, roughly 1,300 scans per second, about 25%
+slower than stock.
+
+**v7.3** makes the wait a setting and does the per-column work on registers:
+TIM10 in one-pulse mode times the settle, its interrupt starts the ADC
+sequence, and a circular DMA stream raises one interrupt per column, which
+stores the results, switches the column and starts TIM10 again. A late
+interrupt can only lengthen a settle, never shorten it.
+
+| Speed | Settle | Per column (measured) | Full scans/s (measured) |
+| --- | --- | --- | --- |
+| 0 Relaxed | 40 µs | 51.6 µs | 1,291 (v7.2's timing) |
+| 1 Standard (default) | 28 µs | 39.5 µs | 1,688 (stock: 1,667) |
+| 2 Fast | 18 µs | 29.9 µs | 2,232 |
+| 3 Fastest | 8 µs | 19.7 µs | 3,387 |
+
+The keyboard measures its real rate with the cycle counter over every 64 scans
+and reports it; the figures above are from a MAD68 HE, and show about 2.3 µs of
+interrupt work per column on top of the settle and the 9.5 µs of conversions.
+Standard reads each row at least 28 µs after the column is powered, later than
+the earliest samples stock already averages in.
+
+**Hardware check** (`tools/scan_check.py`, same keyboard): with nobody touching
+the keys, no speed produced a false press and Fastest was no noisier than
+Relaxed (worst key 13-14 counts peak-to-peak against 15-22). Bottomed-out
+presses of Q to O read 0.997-1.022× their Relaxed values at Fastest, so 8 µs
+is enough settle on this board, and the next-column neighbor of a held key
+read 0 mm at both speeds (no carry-over between columns). The bottom row
+(ADC row 4) reads up to about 0.4 mm at rest at every speed, which is
+harmless at the default 2 mm actuation point but matters below about 0.5 mm.
+
+- **Saved** as a type-3 record (`[speed, 0, 0, 0]`) in the sector 6 journal,
+  next to the lighting records. Firmware before v7.3 skips it.
+- **After a change** every key's rest value is captured again at the new
+  timing (16 scans; the old values stay in use meanwhile), because readings
+  can shift slightly with the settle time. A key whose reading moved more than
+  300 counts from its old rest value is being held, and keeps the old one.
+- **Self-repair:** an ADC overrun, a DMA error, or no column finishing for
+  100 ms power-cycles the ADC (abandoning any sequence in progress), re-arms
+  the DMA stream and converts the current column again after a full settle.
+
+GET_SCAN (`0x68`) reply: scan protocol version (1); current speed; speed count;
+measured full scans per second (LE16, 0 while measuring); 1 while rest values
+are being captured; then the settle time in µs of each speed. SET_SCAN (`0x69`)
+takes the speed, applies it, saves it and replies the same way. Firmware before
+v7.3 answers both as unknown commands; MAD68 Studio then shows the setting as
+needing v7.3.
 
 ## Recovery
 

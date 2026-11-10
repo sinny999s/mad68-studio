@@ -7,7 +7,7 @@ wrapped in Electron, with MAD68-specific additions.
 
 ## Run it
 
-Start `release/MAD68-Studio-0.8.0-portable.exe` (also copied to the Desktop as `MAD68 Studio.exe`). It needs no install.
+Start `release/MAD68-Studio-0.9.0-portable.exe` (also copied to the Desktop as `MAD68 Studio.exe`). It needs no install.
 
 - Windows SmartScreen may warn because the exe is not code-signed. Choose
   **More info, then Run anyway**.
@@ -71,10 +71,19 @@ Plus MAD68-specific pages:
   - The Firmware page shows which custom firmware the keyboard runs (v7.2 and
     later report it; older builds show as "v7.1 or older") and which one the
     app installs. When the keyboard's is older, the page offers **Update to
-    v7.2**, and a dot on Firmware and a note in the sidebar point to it.
+    v7.3**, and a dot on Firmware and a note in the sidebar point to it.
   - The desktop app checks GitHub once per start for a newer MAD68 Studio
     release and links to it. It asks GitHub's public API for the latest
     release of this repository and sends nothing else; offline it stays quiet.
+- **Key Scan Speed** (Settings, custom firmware v7.3): how long the keyboard
+  lets each column of key sensors power up before reading it. Measured on a
+  MAD68 HE: **Relaxed** (40 µs, v7.2's timing, 1,291 full scans a second),
+  **Standard** (28 µs, 1,688, about MadLions' own 1,667, the default), **Fast**
+  (18 µs, 2,232) and **Fastest** (8 µs, 3,387). On that keyboard Fastest read
+  keys exactly like Relaxed: no false presses, the same full-press readings
+  and no crosstalk between keys. The page shows the scan rate the keyboard
+  measures itself, live. Changing it applies at once, is saved on the
+  keyboard, and makes the keyboard re-read every key's resting position.
 - **Try Demo** on the start screen opens a MAD68 HE with its real layout and
   default keymap, with simulated typing, so every page can be tried without
   a keyboard.
@@ -96,7 +105,7 @@ Plus MAD68-specific pages:
 - **Lighting keycodes** in the Remap picker: `RGB Toggle`, `Next/Prev Effect`,
   `Hue +/-`, `Brightness +/-` and `Speed +/-` (keycodes `0xD5` to `0xDD`).
 - **Firmware** (Settings, or the Firmware button on the start screen):
-  - Install the bundled custom firmware (v7.2) or restore stock v1.06, or install any
+  - Install the bundled custom firmware (v7.3) or restore stock v1.06, or install any
     MAD68 HE RGB upgrade file.
   - A QMK build for this keyboard (USB ID `373B:1F59`, upgrade files with
     header version `0x0F02`) is recognised too. From QMK the install button

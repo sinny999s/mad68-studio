@@ -27,6 +27,10 @@ import {
   type GamepadState,
 } from "$lib/libhmk/commands/gamepad-state"
 import type { Rgb, RgbConfig } from "$lib/libhmk/commands/rgb"
+import {
+  estimateScanRate,
+  type ScanSpeedInfo,
+} from "$lib/libhmk/commands/scan-speed"
 import { HMK_GamepadButton, type HMK_GamepadOptions } from "$lib/libhmk/gamepad"
 import { defaultMacroNode, type HMK_MacroNode } from "$lib/libhmk/macro"
 import { hsvToRgb } from "$lib/lighting/color"
@@ -190,7 +194,24 @@ export class DemoKeyboard implements Keyboard {
   }
   async getFirmwareInfo(): Promise<FirmwareInfo> {
     // The demo plays the firmware this app bundles
-    return { major: 7, minor: 2, patch: 0, buildId: 0 }
+    return { major: 7, minor: 3, patch: 0, buildId: 0 }
+  }
+
+  #scanSpeed = 1
+  async getScanSpeed(): Promise<ScanSpeedInfo> {
+    const settleUs = [40, 28, 18, 8]
+    return {
+      version: 1,
+      speed: this.#scanSpeed,
+      // The demo shows what the firmware's own measurement would roughly say
+      scanRate: Math.round(estimateScanRate(settleUs[this.#scanSpeed])),
+      capturing: false,
+      settleUs,
+    }
+  }
+  async setScanSpeed(speed: number) {
+    this.#scanSpeed = speed
+    return this.getScanSpeed()
   }
 
   async disconnect() {}

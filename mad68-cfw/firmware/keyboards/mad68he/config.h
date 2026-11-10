@@ -25,8 +25,8 @@
 #define ADC_COLUMN_SCAN_MATRIX                                                 \
   {{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}, {16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30}, {31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 0, 43, 44}, {45, 0, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58}, {59, 60, 61, 0, 0, 0, 62, 0, 0, 63, 64, 65, 66, 67, 68}}
 
-// Sensor settle time after switching a column on (microseconds)
-#define ADC_SAMPLE_DELAY 40
+// The sensor settle time after switching a column on is the scan speed
+// setting (hardware/stm32f407xx_mad/scan.h), not a build option.
 
 // Same per-conversion sample time as the stock firmware
 #define ADC_NUM_SAMPLE_CYCLES ADC_SAMPLETIME_28CYCLES

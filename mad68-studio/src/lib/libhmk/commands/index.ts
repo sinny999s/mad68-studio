@@ -58,6 +58,8 @@ export enum HMK_Command {
   SET_GAMEPAD_ACTIVE = 0x65,
   SET_PROFILE = 0x66,
   GET_FIRMWARE_INFO = 0x67,
+  GET_SCAN = 0x68,
+  SET_SCAN = 0x69,
 
   UNKNOWN = 255,
 }

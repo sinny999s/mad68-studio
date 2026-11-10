@@ -37,6 +37,9 @@ interrupts, and checks:
      own depth, dead zone, both axes, Fn+G reset), snappy and cancel unchanged
  18. firmware info (v7.2): GET_FIRMWARE_INFO reports the release, build ID and
      marker, and the marker is in the image for the app to read from files
+ 19. key scan speed (v7.3): settle time per speed, register-level scan, the
+     measured scan rate, rest values captured again after a change (held keys
+     keep theirs), the setting saved and restored, stalled scan re-armed
 
 Usage: python verify_cfw.py <firmware.elf> <firmware raw .bin> <nm.exe> <dir with backup/ and tools/>
 """
@@ -112,6 +115,8 @@ class CfwPeriph(Periph):
             return 0                          # clone: ID/capability regs unknown -> 0
         if a == OTG + 0x14:                   # GINTSTS: device mode; test may inject events
             return self.gintsts
+        if a == 0xE0001004:                   # DWT CYCCNT: advanced by Cfw.step, not per read
+            return self.regs.get(a, 0)
         return super().get(a)
 
     def write(self, uc, addr, size, value):
@@ -119,6 +124,7 @@ class CfwPeriph(Periph):
         a = addr & ~3
         if a == ADC1 + 8 and value & (1 << 30):
             self.adc_started = True
+            self.regs[a] &= ~(1 << 30)        # SWSTART clears itself as the sequence starts
         if a == FLASH_CR and value & (1 << 16) and value & 2:     # STRT with SER
             sector = (self.regs.get(FLASH_CR, 0) >> 3) & 0xF
             self.erases.append(sector)
@@ -162,6 +168,7 @@ class Cfw:
         self.flash_writes: list[int] = []
         uc.hook_add(UC_HOOK_MEM_WRITE, self._on_flash_write, begin=0x08000000, end=0x0807FFFF)
         self.p.quiet = True
+        self.drop_adc = False                  # test hook: conversions never complete
         self.col_log: list[int | None] = []
         self.ticks = 0
         self.in_bootloader = False
@@ -270,6 +277,8 @@ class Cfw:
         if not self.p.adc_started or not (regs.get(DMA2_S0, 0) & 1):
             return False
         self.p.adc_started = False
+        if self.drop_adc:
+            return False
         n = regs.get(DMA2_S0 + 4, 0)
         m0 = regs.get(DMA2_S0 + 0xC, 0)
         sqr3, sqr2 = regs.get(ADC1 + 0x34, 0), regs.get(ADC1 + 0x30, 0)
@@ -286,7 +295,8 @@ class Cfw:
             v = self.rest[row][c] + self.press.get((row, c), 0)
             vals.append(max(0, min(4095, v)))
         self.uc.mem_write(m0, struct.pack('<%dH' % n, *vals))
-        regs[DMA2_S0 + 4] = 0
+        if not regs.get(DMA2_S0, 0) & (1 << 8):     # circular streams reload NDTR
+            regs[DMA2_S0 + 4] = 0
         regs[0x40026400] = 0x20                     # LISR: TCIF0
         self.fire(16 + 56)                          # DMA2_Stream0
         regs[0x40026400] = 0
@@ -299,6 +309,8 @@ class Cfw:
         if self.in_bootloader:
             return
         regs = self.p.regs
+        # DWT cycle counter: one cycle per thread instruction of each step
+        regs[0xE0001004] = (regs.get(0xE0001004, 0) + instructions) & 0xFFFFFFFF
         for _ in range(ticks):
             if regs.get(0xE000E010, 0) & 3 == 3:
                 self.fire(15)
@@ -306,6 +318,8 @@ class Cfw:
                 if self.in_bootloader:
                     return
         if regs.get(TIM10, 0) & 1 and regs.get(TIM10 + 0xC, 0) & 1:
+            if regs[TIM10] & 8:                     # one-pulse mode: CEN clears at the update
+                regs[TIM10] &= ~1
             regs[TIM10 + 0x10] = 1
             self.fire(16 + 25)
             regs[TIM10 + 0x10] = 0
@@ -761,6 +775,7 @@ def main():
     still_frames_v71(image, syms, rest, build_id, led_map, keys, kidx)
     stick_v72(gamepad, syms, kidx)
     firmware_info_v72(image, syms, rest, build_id)
+    scan_speed_v73(image, syms, rest, build_id, keys, kidx)
 
     print('[9] flash integrity across all runs: checked per scenario above')
     failed = [w for ok, w in results if not ok]
@@ -1753,9 +1768,9 @@ def stick_v72(gamepad, syms, kidx):
 
 
 def firmware_info_v72(image, syms, rest, build_id):
-    """[18] GET_FIRMWARE_INFO and the release marker (v7.2)."""
+    """[18] GET_FIRMWARE_INFO and the release marker (v7.2; release 7.3.0 now)."""
     print('[18] firmware info v7.2 (release, build ID, marker in the image)')
-    GET_FIRMWARE_INFO, MARKER = 0x67, b'MAD68CFW v7.2.0'
+    GET_FIRMWARE_INFO, MARKER = 0x67, b'MAD68CFW v7.3.0'
     e = Cfw(image, syms, rest, journal=struct.pack('<I', build_id))
     e.stub_usb_host()
     e.run_until(lambda: e.r8('baseline_ready') == 1 and e.p.regs.get(OTG + 0x18, 0) != 0, 3000)
@@ -1771,16 +1786,168 @@ def firmware_info_v72(image, syms, rest, build_id):
 
     r = command([GET_FIRMWARE_INFO])
     bid = struct.unpack_from('<I', r, 4)[0]
-    check(r[0] == GET_FIRMWARE_INFO and tuple(r[1:4]) == (7, 2, 0),
-          f'GET_FIRMWARE_INFO reports release 7.2.0 ({tuple(r[1:4])}, reply {r[0]:#x})')
+    check(r[0] == GET_FIRMWARE_INFO and tuple(r[1:4]) == (7, 3, 0),
+          f'GET_FIRMWARE_INFO reports release 7.3.0 ({tuple(r[1:4])}, reply {r[0]:#x})')
     check(bid == build_id, f'and the ID of this build ({bid:#010x} vs {build_id:#010x})')
     check(r[8:32] == MARKER + bytes(24 - len(MARKER)),
           f'and the marker, zero-padded over whatever was in the buffer ({r[8:32]!r})')
     check(image.count(MARKER + bytes(1)) == 1,
           f'the marker is in the image exactly once, so the app can read the release from a file ({image.count(MARKER)})')
-    r = command([0x68])
-    check(r[0] == 0xFF, f'the next unused board command (0x68) is still refused ({r[0]:#x})')
+    r = command([0x6A])
+    check(r[0] == 0xFF, f'the next unused board command (0x6A) is still refused ({r[0]:#x})')
     bad = [hex(a) for a in e.flash_report() if not (0x08040000 <= a < 0x08080000)]
+    check(not bad, f'no flash changed outside sectors 6/7 {bad}')
+
+
+def scan_speed_v73(image, syms, rest, build_id, keys, kidx):
+    """[19] Key scan speed (v7.3): the settle time per speed, register-level
+    scan (one-pulse TIM10 -> ADC sequence -> circular DMA), the measured scan
+    rate, rest values captured again after a change (held keys keep theirs),
+    the setting saved and restored, and recovery from a stalled scan."""
+    print('[19] key scan speed v7.3 (settle per speed, scan rate, rest values, saved, stall recovery)')
+    GET, SET, SETTLE = 0x68, 0x69, [40, 28, 18, 8]
+    arr = lambda us: us * 168 - 1                     # noqa: E731  TIM10 counts at 168 MHz
+
+    def boot(journal):
+        e = Cfw(image, syms, rest, journal=journal)
+        e.stub_usb_host()
+        e.run_until(lambda: e.r8('baseline_ready') == 1 and e.p.regs.get(OTG + 0x18, 0) != 0, 3000)
+        e.run_until(lambda: False, 50)
+        return e
+
+    def command(e, payload):
+        scratch = (syms['_ebss'] + 0x100) & ~3
+        e.uc.mem_write(scratch, bytes(payload) + bytes(64 - len(payload)))
+        e.uc.mem_write(syms['out_buf'], bytes([0]) + bytes([0xAA]) * 63)   # junk the reply must clear
+        enqueue(e, scratch)
+        e.run_until(lambda: e.uc.mem_read(syms['out_buf'], 1)[0] != 0, 400)
+        return bytes(e.uc.mem_read(syms['out_buf'], 64))
+
+    def busy(e):
+        return command(e, [GET])[6] == 1
+
+    def wait_capture(e):
+        e.run_until(lambda: e.r8('baseline_pass') == 0xFF, 600)
+
+    def baseline_err(e, rest_now, skip=()):
+        bl = [e.r16(syms['baseline'] + 2 * i) for i in range(68)]
+        return max(abs(bl[kidx[rc]] - rest_now[rc[0]][rc[1]]) for rc in keys if rc not in skip)
+
+    R = lambda e, a: e.p.regs.get(a, 0)              # noqa: E731
+    e = boot(struct.pack('<I', build_id))
+
+    # --- defaults and the register setup ---
+    r = command(e, [GET])
+    check(r[0] == GET and r[1] == 1 and r[2] == 1 and r[3] == 4 and list(r[7:11]) == SETTLE and not any(r[11:32]),
+          f'GET_SCAN: protocol 1, Standard (1) of 4 speeds, settle times 40/28/18/8 us, rest of the reply cleared: {r[:12].hex(" ")}')
+    check(R(e, TIM10 + 0x2C) == arr(28) and R(e, TIM10) & 8 and R(e, TIM10 + 0x28) == 0 and R(e, TIM10 + 0xC) & 1,
+          f'TIM10: one-pulse, 28 us settle at 168 MHz (ARR {R(e, TIM10 + 0x2C)} = {arr(28)}), update interrupt')
+    dcr = R(e, DMA2_S0)
+    check(dcr & (1 << 8) and dcr & (1 << 4) and not dcr & (1 << 3) and R(e, DMA2_S0 + 4) == 5
+          and R(e, DMA2_S0 + 8) == ADC1 + 0x4C and R(e, DMA2_S0 + 0xC) == syms['adc_buffer'],
+          f'DMA2 Stream0: circular, 5 results ADC1->DR -> adc_buffer, one interrupt per sequence (CR 0x{dcr:08x})')
+    cr2 = R(e, ADC1 + 8)
+    check(cr2 & 1 and cr2 & (1 << 8) and cr2 & (1 << 9) and not cr2 & 2,
+          f'ADC1: on, DMA with continuous requests, one sequence per start (CR2 0x{cr2:08x})')
+    check(R(e, ADC1 + 4) & (1 << 26), 'ADC overrun interrupt enabled (restarts the column)')
+
+    # --- every conversion follows a column switch and a full settle ---
+    col_bits = {(PORT[p] + 0x18, 1 << (b + 16)) for p, b in COL_PINS}
+    tim_isr = syms['TIM1_UP_TIM10_IRQHandler'] & ~1
+    after = sorted(a & ~1 for a in syms.values() if a & ~1 > tim_isr and a < 0x08080000)[0]
+    e.p.log.clear()
+    e.col_log.clear()
+    e.run_until(lambda: len(e.col_log) >= 32, 200)
+    last_sel = last_cen = -1
+    bad, starts = [], 0
+    for seq, pc, k, a, size, v in e.p.log:
+        if k != 'W':
+            continue
+        if any(a == ba and v & bit for ba, bit in col_bits):
+            last_sel = seq
+        elif a == TIM10 and v & 1:
+            last_cen = seq
+        elif a == ADC1 + 8 and v & (1 << 30) and last_sel >= 0:   # columns switched inside the window
+            starts += 1
+            if not (last_sel < last_cen < seq and tim_isr <= pc < after):
+                bad.append(seq)
+    check(starts >= 30 and not bad,
+          f'each of {starts} conversions is started by the TIM10 interrupt after the column switch and settle timer ({len(bad)} not)')
+
+    # --- measured scan rate ---
+    e.run_until(lambda: False, 1000)
+    r = command(e, [GET])
+    rate = r[4] | r[5] << 8
+    want = round(168e6 / (15 * 3000))                 # emulator: one column per 3000-cycle step
+    check(abs(rate - want) <= 2, f'scan rate measured with the cycle counter over 64 scans ({rate}/s, emulated clock gives {want}/s)')
+
+    # --- change speed: applied at once, saved, rest values captured again ---
+    r = command(e, [SET, 3])
+    check(r[0] == SET and r[2] == 3 and r[6] == 1 and (r[4] | r[5] << 8) == 0,
+          f'SET_SCAN 3 (Fastest): reply shows it, rest capture running, rate re-measuring: {r[:8].hex(" ")}')
+    check(R(e, TIM10 + 0x2C) == arr(8), f'Fastest: 8 us settle (ARR {R(e, TIM10 + 0x2C)})')
+    recs = [pl for t, pl in rgb_records(e) if t == 3]
+    check(recs and recs[-1] == bytes([3, 0, 0, 0]), f'saved as a type-3 record in the sector 6 journal ({recs})')
+    wait_capture(e)
+    check(not busy(e), 'rest capture finishes')
+    check(baseline_err(e, rest) <= 2, f'rest values unchanged when the readings are (max error {baseline_err(e, rest)})')
+    check(not [i for i in range(68) if e.is_pressed(i)], 'no key pressed after the change')
+    n = len([1 for t, _ in rgb_records(e) if t == 3])
+    command(e, [SET, 3])
+    check(len([1 for t, _ in rgb_records(e) if t == 3]) == n, 'setting the same speed again writes nothing')
+    r = command(e, [SET, 4])
+    check(r[0] == 0xFF and command(e, [GET])[2] == 3, f'unknown speed 4 refused, speed unchanged ({r[0]:#x})')
+
+    # A shorter settle can read every sensor slightly lower: rest values follow
+    shifted = [[v - 40 if v < 4095 else v for v in row] for row in rest]
+    e.rest = shifted
+    command(e, [SET, 2])
+    wait_capture(e)
+    check(baseline_err(e, shifted) <= 2, f'readings 40 lower after a change: rest values follow (max error {baseline_err(e, shifted)})')
+    e.run_until(lambda: False, 60)
+    check(not [i for i in range(68) if e.is_pressed(i)], 'and no key reads as pressed')
+
+    # A key held down during the capture keeps its old rest value
+    w = (1, 2)
+    e.press[w] = -900
+    e.run_until(lambda: e.is_pressed(kidx[w]), 300)
+    command(e, [SET, 1])
+    wait_capture(e)
+    bw = e.r16(syms['baseline'] + 2 * kidx[w])
+    check(abs(bw - shifted[1][2]) <= 2, f'W held during the capture keeps its rest value ({bw} vs {shifted[1][2]})')
+    check(baseline_err(e, shifted, skip=(w,)) <= 2, 'every other key captured as usual')
+    e.press.pop(w)
+    e.run_until(lambda: not e.is_pressed(kidx[w]), 300)
+    check(not e.is_pressed(kidx[w]), 'W released afterwards: not pressed')
+    e.rest = rest
+
+    # --- saved speed restored after a restart ---
+    command(e, [SET, 3])
+    wait_capture(e)
+    sector6 = bytes(e.uc.mem_read(0x08040000, 0x20000))
+    e2 = boot(sector6)
+    r = command(e2, [GET])
+    check(r[2] == 3 and R(e2, TIM10 + 0x2C) == arr(8),
+          f'after a restart: comes up at the saved speed (Fastest, ARR {R(e2, TIM10 + 0x2C)})')
+    check(baseline_err(e2, rest) <= 2, 'and captures rest values at that speed')
+
+    # --- a stalled scan is re-armed ---
+    cc = lambda: e2.r32(syms['column_count'])        # noqa: E731
+    e2.drop_adc = True
+    e2.run_until(lambda: False, 5)
+    frozen = cc()
+    e2.p.log.clear()
+    e2.run_until(lambda: False, 150)
+    rearms = sum(1 for _, _, k, a, _, v in e2.p.log if k == 'W' and a == ADC1 + 8 and not v & 1)
+    check(cc() == frozen and rearms >= 1,
+          f'conversions stop: no column completes, and within 100 ms the ADC is power-cycled and re-armed ({rearms}x)')
+    e2.drop_adc = False
+    e2.run_until(lambda: cc() > frozen + 30, 300)
+    check(cc() > frozen + 30, f'once conversions work again the scan carries on ({cc() - frozen} columns)')
+    e2.run_until(lambda: False, 40)
+    check(baseline_err(e2, rest) <= 2 and not [i for i in range(68) if e2.is_pressed(i)],
+          'rest values intact and no key pressed after the stall')
+    bad = [hex(a) for a in e.flash_report() + e2.flash_report() if not (0x08040000 <= a < 0x08080000)]
     check(not bad, f'no flash changed outside sectors 6/7 {bad}')
 
 
