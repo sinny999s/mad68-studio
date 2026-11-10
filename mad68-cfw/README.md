@@ -4,12 +4,10 @@ Custom firmware for the **MadLions MAD68 HE RGB** (stock USB ID `373B:1058`,
 bootloader `373B:2024`), built on [libhmk](https://github.com/peppapighs/libhmk)
 and configured with [hmkconf](https://hmkconf.com) in the browser.
 
-> Status: **v7.1 runs on the real keyboard**: 19 lighting effects, the
-> controller and restarts from the app all work, and the lighting is not
-> redrawn while it is off or showing a still picture. **v7.2** adds "last
-> pressed wins" for the controller stick and reports its release number to
-> MAD68 Studio. It passes the emulation suite and is waiting for its first
-> hardware test.
+> Status: **v7.2 runs on the real keyboard** and is in daily use: 19 lighting
+> effects, the controller (with "last pressed wins" for the stick), restarts
+> from the app and the release number MAD68 Studio reads all work, and the
+> lighting is not redrawn while it is off or showing a still picture.
 
 ## What was recovered from the stock firmware
 

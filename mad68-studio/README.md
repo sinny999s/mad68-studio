@@ -75,6 +75,9 @@ Plus MAD68-specific pages:
   - The desktop app checks GitHub once per start for a newer MAD68 Studio
     release and links to it. It asks GitHub's public API for the latest
     release of this repository and sends nothing else; offline it stays quiet.
+- **Try Demo** on the start screen opens a MAD68 HE with its real layout and
+  default keymap, with simulated typing, so every page can be tried without
+  a keyboard.
 - **Profiles for Games** (Profiles page, desktop app):
   - List games, picked from the open programs or typed as `game.exe`, each
     with a profile. While one runs, the keyboard switches to its profile, and

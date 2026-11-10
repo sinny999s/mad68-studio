@@ -19,11 +19,9 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   import { getAdvancedKeyMetadata } from "$lib/configurator/lib/advanced-keys"
   import { advancedKeysQueryContext } from "$lib/configurator/queries/advanced-keys-query.svelte"
   import { macrosQueryContext } from "$lib/configurator/queries/macros-query.svelte"
-  import { keyboardContext } from "$lib/keyboard"
   import AdvancedKeysDeleteDialog from "../advanced-keys-delete-dialog.svelte"
   import ConfigMenuContent from "./config-menu-content.svelte"
 
-  const { version } = keyboardContext.get()
   const advancedKeysState = advancedKeysStateContext.get()
   const { index } = $derived(advancedKeysState)
 
@@ -43,7 +41,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   <div class="flex size-full flex-col">
     <div class="flex items-center justify-between gap-4 p-4">
       <div class="font-semibold">
-        {getAdvancedKeyMetadata(version).title}
+        {getAdvancedKeyMetadata(advancedKeys[index!].action.type).title}
       </div>
       <div class="flex items-center gap-2">
         <AdvancedKeysDeleteDialog
