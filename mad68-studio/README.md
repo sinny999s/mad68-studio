@@ -84,6 +84,10 @@ Plus MAD68-specific pages:
   - With games listed, closing the window keeps the app running in the tray.
     Starting the app again brings the window back, and the tray menu has Quit.
   - **Make Active** on each profile switches the keyboard to it.
+  - **Import** and **Export** on each profile. A file may hold only some
+    sections (for example only actuation and advanced keys); the rest of
+    the profile is left as it is. A file that can't be used says why: not
+    a profile, from a different keyboard, or nothing usable in it.
 - **Controller toggle keycode** in the Remap picker (Special): `Pad On/Off`
   (`0xDE`), on Fn+G by default.
 - **Lighting keycodes** in the Remap picker: `RGB Toggle`, `Next/Prev Effect`,

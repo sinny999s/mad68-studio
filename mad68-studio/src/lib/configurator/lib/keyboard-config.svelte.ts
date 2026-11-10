@@ -46,7 +46,7 @@ export class KeyboardConfig {
     if (metadata.version > HMK_FIRMWARE_MAX_VERSION) {
       ctx.addIssue({
         code: "custom",
-        message: "Unsupported firmware version",
+        message: "The file is from a newer firmware than this app supports",
       })
       return
     }
@@ -54,7 +54,7 @@ export class KeyboardConfig {
     if (metadata.vendorId !== vendorId || metadata.productId !== productId) {
       ctx.addIssue({
         code: "custom",
-        message: "The keyboard does not match the configuration",
+        message: "The file is from a different keyboard",
       })
       return
     }
@@ -145,6 +145,7 @@ export class KeyboardConfig {
     })
   }
 
+  /** Apply a profile file; returns the sections it changed */
   async setConfig(profile: number, config: unknown) {
     const {
       profile: {
@@ -158,6 +159,17 @@ export class KeyboardConfig {
       },
     } = this.#schema.parse(config)
     const shouldRefetch = this.#profile === profile
+    const applied = Object.entries({
+      keymap,
+      actuationMap,
+      advancedKeys,
+      macros,
+      gamepadButtons,
+      gamepadOptions,
+      tickRate,
+    })
+      .filter(([, v]) => v !== undefined)
+      .map(([k]) => k)
 
     if (keymap !== undefined) {
       await Promise.all(
@@ -214,5 +226,7 @@ export class KeyboardConfig {
       await this.#keyboard.setTickRate({ profile, data: tickRate })
       if (shouldRefetch) this.#tickRateQuery.tickRate.refetch()
     }
+
+    return applied
   }
 }

@@ -20,11 +20,17 @@ import { hmkGamepadOptionsSchema } from "$lib/libhmk/gamepad"
 import { hmkMacroNodeSchema } from "$lib/libhmk/macro"
 import z from "zod"
 
+// A profile section that is missing or invalid is left as it is on the
+// keyboard, so a file can carry only some sections. (`.optional()` is needed:
+// in zod 4 a transformed field is otherwise required to be present.)
 const ignoreOnError = <T>(schema: z.ZodType<T>) =>
-  z.any().transform((val) => {
-    const { success, data } = schema.safeParse(val)
-    return success ? data : undefined
-  })
+  z
+    .any()
+    .transform((val) => {
+      const { success, data } = schema.safeParse(val)
+      return success ? data : undefined
+    })
+    .optional()
 
 const keyboardConfigMetadataSchema = z.object({
   version: uint16Schema,

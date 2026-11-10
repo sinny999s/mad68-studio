@@ -56,6 +56,27 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     }
   }
 
+  // Say what is wrong with a file that can't be imported
+  function importProblem(err: z.ZodError) {
+    const issue = err.issues[0]
+    const top = issue?.path[0]
+    if (
+      !issue ||
+      ((top === "timestamp" || top === "metadata" || top === "profile") &&
+        issue.code === "invalid_type")
+    ) {
+      return {
+        title: "Can't import this file",
+        description: "It isn't a profile exported from MAD68 Studio.",
+      }
+    }
+    const where = issue.path.length ? ` (${issue.path.join(".")})` : ""
+    return {
+      title: "Can't import this profile",
+      description: `${issue.message.replace(/\.$/, "")}${where}.`,
+    }
+  }
+
   let fileRef: HTMLInputElement | null = $state(null)
   let anchorRef: HTMLAnchorElement | null = $state(null)
 
@@ -68,15 +89,20 @@ this program. If not, see <https://www.gnu.org/licenses/>.
       if (!file) return
       try {
         const json = JSON.parse(await file.text())
-        await keyboardConfig.setConfig(profile, json)
-        toast.success(`Successfully imported Profile ${profile}.`)
+        const applied = await keyboardConfig.setConfig(profile, json)
+        if (applied.length === 0) {
+          toast.error("Nothing to import", {
+            description: "The file has no settings this keyboard can use.",
+          })
+        } else {
+          toast.success(`Successfully imported Profile ${profile}.`)
+        }
       } catch (err) {
         if (err instanceof SyntaxError) {
           toast.error("The selected file is not a valid JSON.")
         } else if (err instanceof z.ZodError) {
-          toast.error(
-            "The selected file is not a valid keyboard metadata. See console for details.",
-          )
+          const { title, description } = importProblem(err)
+          toast.error(title, { description })
           console.error(z.treeifyError(err))
         } else {
           toast.error(String(err))
