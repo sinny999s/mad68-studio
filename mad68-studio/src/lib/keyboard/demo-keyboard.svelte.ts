@@ -21,11 +21,11 @@ import {
   defaultAdvancedKey,
   type HMK_AdvancedKey,
 } from "$lib/libhmk/advanced-keys"
+import type { FirmwareInfo } from "$lib/libhmk/commands/firmware-info"
 import {
   XINPUT_BUTTONS,
   type GamepadState,
 } from "$lib/libhmk/commands/gamepad-state"
-import type { FirmwareInfo } from "$lib/libhmk/commands/firmware-info"
 import type { Rgb, RgbConfig } from "$lib/libhmk/commands/rgb"
 import { HMK_GamepadButton, type HMK_GamepadOptions } from "$lib/libhmk/gamepad"
 import { defaultMacroNode, type HMK_MacroNode } from "$lib/libhmk/macro"

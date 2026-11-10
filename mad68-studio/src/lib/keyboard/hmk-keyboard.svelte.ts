@@ -36,8 +36,8 @@ import {
   setCalibration,
 } from "$lib/libhmk/commands/calibration"
 import { factoryReset } from "$lib/libhmk/commands/factory-reset"
-import { firmwareVersion } from "$lib/libhmk/commands/firmware-version"
 import { getFirmwareInfo } from "$lib/libhmk/commands/firmware-info"
+import { firmwareVersion } from "$lib/libhmk/commands/firmware-version"
 import {
   getGamepadButtons,
   setGamepadButtons,
