@@ -71,19 +71,36 @@ Plus MAD68-specific pages:
   - The Firmware page shows which custom firmware the keyboard runs (v7.2 and
     later report it; older builds show as "v7.1 or older") and which one the
     app installs. When the keyboard's is older, the page offers **Update to
-    v7.3**, and a dot on Firmware and a note in the sidebar point to it.
+    v7.4**, and a dot on Firmware and a note in the sidebar point to it.
   - The desktop app checks GitHub once per start for a newer MAD68 Studio
     release and links to it. It asks GitHub's public API for the latest
     release of this repository and sends nothing else; offline it stays quiet.
-- **Key Scan Speed** (Settings, custom firmware v7.3): how long the keyboard
-  lets each column of key sensors power up before reading it. Measured on a
-  MAD68 HE: **Relaxed** (40 µs, v7.2's timing, 1,291 full scans a second),
-  **Standard** (28 µs, 1,688, about MadLions' own 1,667, the default), **Fast**
-  (18 µs, 2,232) and **Fastest** (8 µs, 3,387). On that keyboard Fastest read
-  keys exactly like Relaxed: no false presses, the same full-press readings
-  and no crosstalk between keys. The page shows the scan rate the keyboard
-  measures itself, live. Changing it applies at once, is saved on the
-  keyboard, and makes the keyboard re-read every key's resting position.
+- **Key Scan Speed** (Settings, custom firmware v7.3; the last three speeds
+  from v7.4): how often the keyboard reads all of its key sensors. Measured on
+  a MAD68 HE, in full scans a second and as sensor readings a second (75 per
+  scan):
+  - One row of sensors at a time, differing in how long each column is given
+    to power up: **Relaxed** (40 µs, v7.2's timing, 1,291, 97K), **Standard**
+    (28 µs, 1,688, 127K, about MadLions' own 1,667, the default), **Fast**
+    (18 µs, 2,232, 167K) and **Fastest** (8 µs, 3,387, 254K).
+  - Three rows at once, on all three of the chip's converters: **Turbo**
+    (8 µs, 4,741, 356K), **Extreme** (5 µs, 6,060, 454K) and **Max** (5 µs
+    with shorter sampling, 6,852, 514K). On that keyboard they ran millions
+    of scans without a fault and read keys within 0.3% of Relaxed. The
+    keyboard checks one of these itself before using it, and runs Fastest
+    instead if its readings don't agree; the page says so.
+  - The page shows the scan rate the keyboard measures itself, live. Changing
+    the speed applies at once, is saved on the keyboard, and makes the
+    keyboard re-read every key's resting position.
+- **Key Smoothing** (Settings, custom firmware v7.4): how the key readings are
+  smoothed before the keyboard acts on them. **Classic** is the filter up to
+  v7.3: it works over time, so it trails the key by about 1.5 ms at any scan
+  speed (and more when a fast scan slows the rest of the firmware down).
+  **Smooth**, **Balanced** and **Fast** work over the last readings of each
+  key instead (8, 4 or 2 of them) and drop a single stray reading, so the
+  faster the scan, the less they trail: at Max about 1.2, 0.6 and 0.3 ms. At
+  the slower scan speeds they trail more than Classic. Each level shows its
+  delay at the current scan speed.
 - **Try Demo** on the start screen opens a MAD68 HE with its real layout and
   default keymap, with simulated typing, so every page can be tried without
   a keyboard.

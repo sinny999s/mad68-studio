@@ -15,6 +15,10 @@
 
 #pragma once
 
+// The analog driver counts every reading it takes (scan.h), so matrix.c can
+// run its filter once per reading instead of once per main loop pass
+#define MATRIX_SCAN_FILTER
+
 //--------------------------------------------------------------------+
 // ADC Configuration
 //--------------------------------------------------------------------+

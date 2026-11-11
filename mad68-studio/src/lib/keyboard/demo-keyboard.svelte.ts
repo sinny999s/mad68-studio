@@ -29,6 +29,7 @@ import {
 import type { Rgb, RgbConfig } from "$lib/libhmk/commands/rgb"
 import {
   estimateScanRate,
+  SCAN_SPEED_IN_EFFECT,
   type ScanSpeedInfo,
 } from "$lib/libhmk/commands/scan-speed"
 import { HMK_GamepadButton, type HMK_GamepadOptions } from "$lib/libhmk/gamepad"
@@ -194,23 +195,40 @@ export class DemoKeyboard implements Keyboard {
   }
   async getFirmwareInfo(): Promise<FirmwareInfo> {
     // The demo plays the firmware this app bundles
-    return { major: 7, minor: 3, patch: 0, buildId: 0 }
+    return { major: 7, minor: 4, patch: 0, buildId: 0 }
   }
 
   #scanSpeed = 1
+  #scanSmoothing = 0
   async getScanSpeed(): Promise<ScanSpeedInfo> {
-    const settleUs = [40, 28, 18, 8]
+    const settleUs = [40, 28, 18, 8, 8, 5, 5]
+    const modes = [0, 0, 0, 0, 3, 3, 3]
+    const samples = [2, 2, 2, 2, 2, 2, 1]
+    const i = this.#scanSpeed
+    // The demo shows what the firmware's own measurements would roughly say
+    const scanRate = Math.round(
+      estimateScanRate(settleUs[i], modes[i], samples[i]),
+    )
     return {
-      version: 1,
-      speed: this.#scanSpeed,
-      // The demo shows what the firmware's own measurement would roughly say
-      scanRate: Math.round(estimateScanRate(settleUs[this.#scanSpeed])),
+      version: 2,
+      speed: i,
+      scanRate,
       capturing: false,
       settleUs,
+      modes,
+      samples,
+      state: SCAN_SPEED_IN_EFFECT,
+      smoothing: this.#scanSmoothing,
+      // The main loop slows as the scan takes more of the processor's time
+      loopRate: Math.round(12500 - 0.75 * scanRate),
     }
   }
   async setScanSpeed(speed: number) {
     this.#scanSpeed = speed
+    return this.getScanSpeed()
+  }
+  async setScanSmoothing(level: number) {
+    this.#scanSmoothing = level
     return this.getScanSpeed()
   }
 

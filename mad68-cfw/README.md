@@ -8,8 +8,14 @@ and configured with [hmkconf](https://hmkconf.com) in the browser.
 > effects, the controller (with "last pressed wins" for the stick), restarts
 > from the app and the release number MAD68 Studio reads all work, and the
 > lighting is not redrawn while it is off or showing a still picture.
-> **v7.3** (key scan speed, see below) passes every emulator check and is
-> waiting for its first run on the real keyboard.
+> **v7.3** (key scan speed, see below) runs on the real keyboard too, with
+> its four speeds measured there. **7.3.90**, a test build, found on the real
+> keyboard that ADC2 and ADC3 are there and work, and how short the timing
+> can get (results below). **v7.4** turns that into three faster scan speeds
+> and adds smoothing that runs per reading. It passes every emulator check
+> and runs on the real keyboard: every speed and smoothing level without a
+> fault or a false press, and a filter delay measured on real presses of
+> 0.37 ms at Max with Fast smoothing, against 1.91 ms with the classic filter.
 
 ## Other MAD68 boards
 
@@ -166,7 +172,12 @@ resting sensor values and checks GPIO/clock/ADC/USB setup against stock, the
 scan order, key presses in both magnet polarities, Fn+Ins, both fail-safe
 paths, a HardFault, and that no flash outside sectors 6/7 changes.
 
-Latest run (`out/MAD68HE_libhmk_v7.3.bin`, log `out/verify_v73.log`): **249/249 passed**.
+Latest run (`out/MAD68HE_libhmk_v7.4.bin`, log `out/verify_v74.log`):
+**375/375 passed**. The 7.3.90 test build (`out/MAD68HE_libhmk_v7.4-test1.bin`,
+log `out/verify_v74t1.log`) passed the 323 checks of its time, and v7.3
+(`out/MAD68HE_libhmk_v7.3.bin`, log `out/verify_v73.log`) its 249; v7.4 passes
+all of those unchanged apart from the release number, the new speed count and
+the two new commands.
 v7.2 (build `0xe59ec365`, log `out/verify_v72.log`) passed the 223 checks of its
 time; that suite on a rebuild of v7.1 failed only the new v7.2 stick, protocol
 and firmware info checks (`out/verify_v72_baseline_v71.log`), so they really
@@ -571,6 +582,262 @@ are being captured; then the settle time in µs of each speed. SET_SCAN (`0x69`)
 takes the speed, applies it, saves it and replies the same way. Firmware before
 v7.3 answers both as unknown commands; MAD68 Studio then shows the setting as
 needing v7.3.
+
+## Faster scan speeds and per-reading smoothing (v7.4)
+
+### Scan speeds 4-6
+
+Three more scan speeds, read with all three ADCs at once and with the next
+column powered before the results are stored (how: "Timing test" below).
+Measured on a MAD68 HE:
+
+| Speed | Settle | Sample | Full scans/s | Sensor readings/s |
+| --- | --- | --- | --- | --- |
+| 3 Fastest (one ADC, v7.3) | 8 µs | 28 cycles | 3,372 | 253K |
+| 4 Turbo | 8 µs | 28 cycles | 4,741 | 356K |
+| 5 Extreme | 5 µs | 28 cycles | 6,060 | 454K |
+| 6 Max | 5 µs | 15 cycles | 6,852 | 514K |
+
+Turbo changes nothing about how a sensor is read: same settle and sample
+time as Fastest. A three-minute run of each on the keyboard (hands off, about
+0.85, 1.09 and 1.23 million full scans, log `out/scan_soak_v74t1.json`) had
+no fault and no false press.
+
+**A three-ADC speed is a request.** The chip is an STM32F4-compatible part
+and this firmware runs on other MAD68 boards too, so the keyboard never
+assumes ADC2 and ADC3 work:
+
+- It always starts on one ADC (a three-ADC speed starts as Fastest), captures
+  the rest values, and only then asks for the saved speed's timing.
+- Asking is a probe: 16 scans at that timing with the keys left on their
+  readings. If no key's average is more than 150 counts from its reading
+  just before, the keyboard switches, moving each key's rest value by as much
+  as its reading moved, so no key's travel changes at that instant.
+- Otherwise the speed is refused: it stays the saved speed, the keyboard
+  runs as Fastest, and GET_SCAN says so. The same happens later after 32
+  faults (overrun, DMA error, a result of ADC2/ADC3 missing) or if no column
+  finishes for 100 ms. Setting the speed again retries.
+
+The saved record is still `[speed, ...]`; v7.3 meeting a speed it does not
+know starts on Standard.
+
+### Smoothing
+
+libhmk's filter is `(x + 15y) / 16` once per main loop pass, on whatever the
+latest reading is. Its delay is therefore about 15 passes whatever the scan
+speed: about 1.5 ms at 10,000 passes a second, and more on a fast scan, whose
+interrupts slow the main loop (7,300 passes a second at Max: 2 ms). A faster
+scan alone does not make keys respond sooner.
+
+v7.4 adds three levels that take one step per new reading of a key instead
+(`matrix.c`, enabled by `MATRIX_SCAN_FILTER`; the analog driver counts the
+readings of each column):
+
+1. the median of the key's last three readings, which drops a single stray
+   reading completely;
+2. `y += (median - y) / 8`, `/ 4` or `/ 2` (Smooth, Balanced, Fast), in
+   1/256 counts, once per reading taken since the last pass;
+3. the result follows that down at once, and up only from 8 counts below it
+   (`MATRIX_FILTER_RISE_BAND`). A resting key so sits at the low edge of its
+   noise, where the start-up calibration put its rest value, as it does with
+   the classic filter (whose integer rounding gives it a band of 16).
+
+| Level | Trails the key by | At Max (6,852 scans/s) | At Fastest (3,372) |
+| --- | --- | --- | --- |
+| 0 Classic (default) | about 15 main loop passes | about 2.0 ms | about 1.5 ms |
+| 1 Smooth | 8 readings | 1.2 ms | 2.4 ms |
+| 2 Balanced | 4 readings | 0.6 ms | 1.2 ms |
+| 3 Fast | 2 readings | 0.3 ms | 0.6 ms |
+
+The stray readings matter on this board: the bottom row (PA7) has one 30 to
+90 counts off several times a second at every timing. Classic lets about a
+fifth of each through (in the emulator one 60-count stray reading moves the
+filtered value 12 counts, 0.3 mm of travel near the top); levels 1-3 show
+none of it.
+
+Changing level moves nothing: the new filter starts from the filtered value
+in use. Start-up calibration runs with the saved level. The level is saved as
+byte 1 of the scan record (`[speed, level, 0, 0]`), which v7.3 ignores.
+
+### Commands
+
+GET_SCAN (`0x68`) is at protocol version 2: after the settle times come each
+speed's mode and sample code, whether the saved speed is in effect (0),
+switching (1) or refused (2), the smoothing level and count, and the main
+loop rate. SET_SCAN (`0x69`) with a three-ADC speed replies while it is still
+switching. SET_SCAN_FILTER (`0x6C`) sets the smoothing level. Layouts:
+`firmware/hardware/stm32f407xx_mad/scan.h`.
+
+SCAN_STATUS (`0x6B`) can also time the filter on real presses: for each
+press, the time from the key's reading passing half travel to its filtered
+value doing so (count, average, shortest, longest).
+
+**On the keyboard:** `tools/speed_test.py` (close MAD68 Studio first) uses
+every combination of the four fastest speeds and the four levels for a few
+seconds with hands off (scan rate, main loop rate, faults, how much a resting
+key's filtered reading moves, false presses), then has you tap keys at five
+settings and reports the delay the keyboard measured.
+
+### Results on a MAD68 HE (v7.4, 2026-11-11)
+
+`tools/speed_test.py`, log `out/speed_test_v74.json`. Every speed came into
+effect (none refused). Over the 16 combinations of Fastest, Turbo, Extreme
+and Max with the four levels, 5 s each with hands off: no fault, no false
+press, and no key read deeper than 0.00 mm.
+
+| Speed | Full scans/s | Main loop/s, Classic | Main loop/s, levels 1-3 |
+| --- | --- | --- | --- |
+| Fastest | 3,354 | 8,678 | 8,705 |
+| Turbo | 4,715 | 7,741 | 6,610 |
+| Extreme | 5,990 | 6,962 | 5,463 |
+| Max | 6,770 | 6,626 | 5,090 |
+
+(While the script reads every key over USB; idle, Max with Fast runs at about
+7,000 scans and 6,000 passes a second.) The per-reading filter costs main
+loop time once most passes have a new reading for every key, and at Max the
+loop misses about a quarter of the readings; the filter takes their steps
+anyway, so its delay in time holds, as measured below.
+
+At rest the filtered reading of a key moved by (highest minus lowest, in
+counts, median key / worst key over the four speeds): Classic 4-6 / 11-17,
+always worst on a bottom-row key; levels 1-3: 0-1 / 1-4, with one exception
+of 12 on a bottom-row key in one 5 s window (Extreme, Balanced), which is what
+two stray readings in a row look like. The per-reading levels are steadier at
+rest than the classic filter.
+
+Filter delay on real presses at Max (34 to 43 presses per level), from a
+key's reading passing half travel to its filtered value doing so:
+
+| Level | Measured | Shortest - longest | Expected |
+| --- | --- | --- | --- |
+| 0 Classic | 1.91 ms | 1.50 - 2.40 ms | 2.11 ms |
+| 1 Smooth | 1.06 ms | 0.87 - 1.25 ms | 1.15 ms |
+| 2 Balanced | 0.60 ms | 0.45 - 0.70 ms | 0.57 ms |
+| 3 Fast | 0.37 ms | 0.17 - 0.70 ms | 0.29 ms |
+
+Fastest with Classic (v7.3's fastest setting) was not captured in that run;
+by the same rule that predicts Classic at Max within 10%, it is about 1.5 ms.
+
+## Timing test (from 7.3.90, the v7.4 test build; still in v7.4)
+
+The 7.3.90 build was for finding out how fast this board can read its keys.
+It started up and read the keys exactly as v7.3 does, and added two raw HID
+commands that try other timings. v7.4 keeps them. Nothing they do is saved:
+after a restart the keyboard is back on its saved scan speed.
+
+**What can be varied** (a "timing"):
+
+- **Settle time**, in timer ticks (168 per µs), down to a fraction of a µs.
+- **ADC sample time**: 3, 15 or 28 cycles and up (28 is stock's and v7.3's).
+- **Three ADCs at once.** The row pins reach more than one ADC (PA0-PA3:
+  ADC1, ADC2 and ADC3; PA7: ADC1 and ADC2), so ADC1 can convert rows 0 and 3,
+  ADC2 rows 1 and 4 and ADC3 row 2 at the same time: two conversion rounds
+  (3.8 µs at 28 cycles) instead of five (9.5 µs). Each ADC has its own
+  circular DMA stream (DMA2 stream 0, 2 and 1); the timer interrupt starts
+  ADC3, ADC2, then ADC1, so ADC1 finishes last and its DMA interrupt still
+  ends the column, after checking that the other two delivered.
+- **Next column first.** The interrupt that ends a column can take the
+  results out of the DMA buffer, power the next column and start its settle
+  time, and only then store the results. In the emulator the work a column
+  has to wait for drops from 110 instructions (v7.3) to 71 with one ADC and
+  93 with three.
+
+**Probes.** The MCU is an STM32F4-compatible part and the stock firmware only
+ever uses ADC1, so none of this is taken for granted. A probe (`SCAN_PROBE`,
+`0x6A`) runs the scan at a timing for 16 to 4,096 full scans and keeps each
+key's lowest, highest and average raw reading and the time the scans took,
+while the keys stay on their readings from before it. Whatever a timing does
+to the readings, it cannot press or release a key. `SCAN_STATUS` (`0x6B`)
+returns the state, the fault counters, the main loop rate and the results.
+Layouts are in `firmware/hardware/stm32f407xx_mad/scan.h`.
+
+**Going live.** A probe can ask for its timing to be kept. That only happens
+if, after 16 scans, no key's average is more than 150 counts from its reading
+just before; each key's rest value then moves by as much as its reading did,
+so no key's travel changes at that instant, and every rest value is captured
+again. A live timing is given up for the saved scan speed after 32 faults
+(overrun, DMA error, results of ADC2/ADC3 missing) or if no column finishes
+for 100 ms, and whenever a scan speed is set. ADC2 and ADC3 are only clocked
+once a probe asks for them; if their registers do not answer the probe fails
+and nothing is switched.
+
+**On the keyboard:** `tools/scan_probe.py` (close MAD68 Studio first).
+
+```bash
+python tools/scan_probe.py                  # every timing: hands off, then keys held down
+python tools/scan_probe.py --live 3,8,2     # read the keys with one timing for 20 s
+```
+
+The first form compares every timing with the reference (one ADC, 40 µs,
+28 cycles): scan rate, noise, how far the rest readings moved, how a full
+press reads, and whether keys around a held one read differently. The second
+runs one timing for real and counts false presses and faults.
+
+**What emulation cannot prove here:** that this chip has an ADC2 and ADC3
+that behave like ST's, that its DMA request mapping for them matches the
+STM32F407's, and how short a settle or sample time its sensors and ADC
+inputs tolerate. That is what the probes measure.
+
+### Results on a MAD68 HE (2026-11-10)
+
+`tools/scan_probe.py`, 512 scans per timing with hands off and 128 with 2, R,
+J, M and Space held down (one key per row). Logs: `out/scan_probe_v74t1.json`,
+`out/scan_live_v74t1.json`. ADC2 and ADC3 are present and work, with no fault
+(overrun, DMA error, missing result, stalled scan) in any probe or live run.
+
+Probes, against the reference (one ADC, 40 µs, 28 cycles). "+" = next column
+first. Rest moved = worst row's median; full press = range over the five keys.
+
+| Timing | Scans/s | Total | Rest moved | Full press |
+| --- | --- | --- | --- | --- |
+| 1 ADC, 8 µs, 28 cyc (Fastest) | 3,365 | 252K | -1.1 | 99.8-100.1% |
+| 1 ADC+, 8 µs, 28 cyc | 3,473 | 260K | -1.1 | 99.8-100.1% |
+| 1 ADC+, 5 µs, 28 cyc | 4,122 | 309K | -2.6 | 99.8-100.0% |
+| 3 ADCs, 8 µs, 28 cyc | 4,497 | 337K | +1.2 | 99.9-100.1% |
+| 3 ADCs+, 8 µs, 28 cyc | 4,815 | 361K | +1.2 | 99.9-100.2% |
+| 3 ADCs+, 5 µs, 28 cyc | 6,171 | 463K | -1.6 | 99.8-100.3% |
+| 3 ADCs+, 4 µs, 28 cyc | 6,818 | 511K | -3.0 | 99.7-100.2% |
+| 3 ADCs+, 3 µs, 28 cyc | 7,630 | 572K | -6.1 | 99.5-99.9% |
+| 3 ADCs+, 2 µs, 28 cyc | 8,661 | 650K | -16.0 | 98.4-99.8% |
+| 3 ADCs+, 1 µs, 28 cyc | 9,988 | 749K | -44.6 | 94.9-99.6% |
+| 3 ADCs+, 5 µs, 15 cyc | 6,994 | 525K | -2.4 | 99.8-100.3% |
+| 3 ADCs+, 5 µs, 3 cyc | 7,989 | 599K | -4.0 | 99.7-100.4% |
+
+- **Settle time is the limit.** A row read less than about 3 µs after its
+  column is powered reads low, at rest and pressed, by about three times as
+  much for every microsecond less (-6, -16, -45 counts at 3, 2, 1 µs; a full
+  press is about 760 counts). Only the rows converted first are affected.
+  At 5 µs the readings are within 3 counts and 0.3% of the reference.
+- **Sample time is not**, down to 15 cycles. At 3 cycles the second row an
+  ADC converts moves towards the first by a few counts.
+- The three ADCs agree to within 2.4 counts at rest and 0.3% over a full
+  press. Median noise is 8 counts peak to peak at every timing down to 3 µs.
+- No key next to, or in the column of, a held key moved more than 2 counts
+  more than at the reference timing.
+- The bottom row (PA7) shows occasional readings 30 to 90 counts off at every
+  timing, the reference included. They are not caused by the timing.
+
+Live, 8 s each with hands off (while the script reads all keys over USB,
+which costs the main loop about 12%; idle it runs at 10,763 passes a second
+on one ADC at 8 µs):
+
+| Timing | Scans/s | Total | Main loop/s | Faults | False presses |
+| --- | --- | --- | --- | --- | --- |
+| 1 ADC, 8 µs, 28 cyc (Fastest) | 3,372 | 253K | 9,448 | 0 | none |
+| 3 ADCs+, 8 µs, 28 cyc | 4,741 | 356K | 8,253 | 0 | none |
+| 3 ADCs+, 5 µs, 28 cyc | 6,060 | 454K | 7,751 | 0 | none |
+| 3 ADCs+, 5 µs, 15 cyc | 6,852 | 514K | 7,328 | 0 | none |
+| 3 ADCs+, 5 µs, 3 cyc | 7,813 | 586K | 6,909 | 0 | none |
+
+**What this means for response time.** The scan interrupts take time from the
+main loop, so the loop slows as the scan speeds up, and above about 7,000
+scans a second the loop no longer sees every scan. libhmk's filter
+(`matrix.c`: `(x + 15y) / 16`) runs once per main loop pass, not once per
+scan, so a key's filtered travel trails its real travel by about 15 passes:
+about 1.5 ms today, and more when the loop is slower. A faster scan alone
+therefore does not make keys respond sooner. It does deliver more fresh
+readings per millisecond, which a filter that runs per scan could turn into
+the same smoothing over a shorter time.
 
 ## Recovery
 

@@ -31,6 +31,13 @@
 // Same per-conversion sample time as the stock firmware
 #define ADC_NUM_SAMPLE_CYCLES ADC_SAMPLETIME_28CYCLES
 
+// Parallel read (v7.4 timing test): the rows each ADC converts, in order, as
+// indexes into the row list above. PA0-PA3 reach ADC1, ADC2 and ADC3; PA7
+// reaches ADC1 and ADC2 only. ADC1 converts at least as many as the others.
+#define ADC_PARALLEL_ADC1_ROWS {0, 3}
+#define ADC_PARALLEL_ADC2_ROWS {1, 4}
+#define ADC_PARALLEL_ADC3_ROWS {2}
+
 // Value reported for a key at rest; travel is added on top in the direction
 // learned for that key, leaving 3071 counts of headroom.
 #define ADC_REST_REFERENCE 1024

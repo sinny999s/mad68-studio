@@ -263,7 +263,7 @@ __attribute__((used)) const volatile uint32_t board_firmware_build_id =
 // Reported by GET_FIRMWARE_INFO, and embedded in the image as a marker that
 // MAD68 Studio reads from upgrade files to tell which release a file holds.
 #define MAD68_CFW_MAJOR 7
-#define MAD68_CFW_MINOR 3
+#define MAD68_CFW_MINOR 4
 #define MAD68_CFW_PATCH 0
 #define MAD68_STR_(x) #x
 #define MAD68_STR(x) MAD68_STR_(x)
@@ -590,9 +590,13 @@ static void firmware_info_response(uint8_t *out) {
   memcpy(out + 8, board_firmware_marker, sizeof(board_firmware_marker));
 }
 
-// GET_SCAN / SET_SCAN (v7.3), layouts in scan.h
+// GET_SCAN / SET_SCAN (v7.3) / SET_SCAN_FILTER (v7.4), layouts in scan.h
+_Static_assert(12 + 2 * SCAN_SPEED_COUNT <= 32, "GET_SCAN reply fits");
+
 static void scan_response(uint8_t *out) {
   const uint32_t rate = analog_scan_rate();
+  const uint32_t loops = analog_loop_rate();
+  uint8_t *tail = out + 7 + 2 * SCAN_SPEED_COUNT;
   memset(out + 1, 0, 31);
   out[1] = SCAN_PROTOCOL_VERSION;
   out[2] = analog_scan_speed();
@@ -600,18 +604,68 @@ static void scan_response(uint8_t *out) {
   out[4] = (uint8_t)(rate > 0xFFFFu ? 0xFFu : rate);
   out[5] = (uint8_t)(rate > 0xFFFFu ? 0xFFu : rate >> 8);
   out[6] = analog_baseline_busy() ? 1u : 0u;
-  for (uint8_t i = 0; i < SCAN_SPEED_COUNT; i++)
+  for (uint8_t i = 0; i < SCAN_SPEED_COUNT; i++) {
     out[7 + i] = analog_settle_us(i);
+    out[7 + SCAN_SPEED_COUNT + i] = analog_speed_timing(i);
+  }
+  tail[0] = analog_speed_state();
+  tail[1] = analog_filter_level();
+  tail[2] = SCAN_FILTER_COUNT;
+  tail[3] = (uint8_t)(loops > 0xFFFFu ? 0xFFu : loops);
+  tail[4] = (uint8_t)(loops > 0xFFFFu ? 0xFFu : loops >> 8);
 }
 
 static bool scan_command(const uint8_t *in, uint8_t *out) {
   if (in[0] == BOARD_COMMAND_SET_SCAN) {
     if (!analog_set_scan_speed(in[1]))
       return false;
-    const uint8_t rec[SCAN_REC_SIZE] = {in[1], 0, 0, 0};
+  } else if (in[0] == BOARD_COMMAND_SET_SCAN_FILTER) {
+    if (!analog_set_filter_level(in[1]))
+      return false;
+  }
+  if (in[0] != BOARD_COMMAND_GET_SCAN) {
+    const uint8_t rec[SCAN_REC_SIZE] = {analog_scan_speed(),
+                                        analog_filter_level(), 0, 0};
     board_rgb_store(RGB_REC_SCAN, rec, sizeof(rec));
   }
   scan_response(out);
+  return true;
+}
+
+// SCAN_PROBE / SCAN_STATUS (v7.4 timing test), layouts in scan.h
+static bool lag_measuring = false;
+
+static void put_le16(uint8_t *p, uint32_t v) {
+  if (v > 0xFFFFu)
+    v = 0xFFFFu;
+  p[0] = (uint8_t)v;
+  p[1] = (uint8_t)(v >> 8);
+}
+
+static bool scan_test_command(const uint8_t *in, uint8_t *out) {
+  bool reset = false;
+  if (in[0] == BOARD_COMMAND_SCAN_PROBE) {
+    if (in[6] > 1 ||
+        !analog_probe_start(in[1], (uint16_t)(in[2] | in[3] << 8), in[4], in[5],
+                            in[6] == 1))
+      return false;
+  } else if (in[1] == 1) {
+    return analog_test_results(in[2], out);
+  } else if (in[1] == 2 || in[1] == 3) {
+    lag_measuring = in[1] == 2;
+    matrix_lag_measure(lag_measuring);
+    reset = true;
+  } else if (in[1] != 0) {
+    return false;
+  }
+  analog_test_status(out);
+  uint32_t count, mean_us, min_us, max_us;
+  matrix_lag_stats(&count, &mean_us, &min_us, &max_us, reset);
+  out[40] = lag_measuring ? 1u : 0u;
+  put_le16(out + 41, count);
+  put_le16(out + 43, mean_us);
+  put_le16(out + 45, min_us);
+  put_le16(out + 47, max_us);
   return true;
 }
 
@@ -622,7 +676,11 @@ bool board_command(const uint8_t *in, uint8_t *out) {
     return true;
   case BOARD_COMMAND_GET_SCAN:
   case BOARD_COMMAND_SET_SCAN:
+  case BOARD_COMMAND_SET_SCAN_FILTER:
     return scan_command(in, out);
+  case BOARD_COMMAND_SCAN_PROBE:
+  case BOARD_COMMAND_SCAN_STATUS:
+    return scan_test_command(in, out);
   case BOARD_COMMAND_GET_GAMEPAD:
   case BOARD_COMMAND_SET_GAMEPAD_ACTIVE:
   case BOARD_COMMAND_SET_PROFILE:

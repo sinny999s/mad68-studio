@@ -117,6 +117,8 @@ export type KeyboardAction = {
   getScanSpeed(): Promise<ScanSpeedInfo | null>
   /** Applies at once and is saved on the keyboard (firmware v7.3) */
   setScanSpeed(speed: number): Promise<ScanSpeedInfo>
+  /** Applies at once and is saved on the keyboard (firmware v7.4) */
+  setScanSmoothing(level: number): Promise<ScanSpeedInfo>
 }
 
 export type Keyboard = KeyboardState & KeyboardAction

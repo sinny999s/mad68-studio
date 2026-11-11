@@ -40,6 +40,17 @@ interrupts, and checks:
  19. key scan speed (v7.3): settle time per speed, register-level scan, the
      measured scan rate, rest values captured again after a change (held keys
      keep theirs), the setting saved and restored, stalled scan re-armed
+ 20. timing test (v7.4 test build): probes measure at another timing while the
+     keys stay on their old readings, the parallel read on ADC1/ADC2/ADC3
+     (sequences, DMA streams, start order, every key from its own sensor),
+     going live only when the readings stay put, and giving a timing up when
+     an ADC is missing, dies, or the scan stops
+ 21. v7.4: scan speeds 4-6 (three ADCs) are asked for through a probe at
+     start-up and on SET_SCAN, refused or dropped for one ADC at 8 us when the
+     readings do not agree, an ADC is missing or dies, or the scan stops;
+     smoothing levels 1-3 run once per reading (median of three, then a
+     step of 1/8, 1/4 or 1/2, with a rise band), drop a stray reading,
+     change without moving anything, are saved; delay measured on presses
 
 Usage: python verify_cfw.py <firmware.elf> <firmware raw .bin> <nm.exe> <dir with backup/ and tools/>
 """
@@ -76,9 +87,17 @@ ROW_CH = {3: 0, 2: 1, 1: 2, 0: 3, 7: 4}            # ADC channel -> row
 COL_PINS = [('A', 8), ('A', 9), ('A', 10), ('A', 11), ('A', 12), ('A', 15), ('C', 10), ('C', 11),
             ('C', 12), ('D', 2), ('B', 3), ('B', 4), ('B', 5), ('B', 6), ('B', 7)]
 PORT = {p: 0x40020000 + 0x400 * i for i, p in enumerate('ABCDEFGHI')}
-DMA2_S0 = 0x40026400 + 0x10
+DMA2 = 0x40026400
+DMA2_S0 = DMA2 + 0x10
+DMA2_S1 = DMA2 + 0x10 + 0x18
+DMA2_S2 = DMA2 + 0x10 + 0x30
 TIM10 = 0x40014400
 ADC1 = 0x40012000
+ADC2 = 0x40012100
+ADC3 = 0x40012200
+# ADC number -> its registers, the DMA2 stream and request channel that serve
+# it on an STM32F407 (RM0090 table 43), and that stream's TCIF bit in LISR
+ADC_DMA = {1: (ADC1, DMA2_S0, 0, 1 << 5), 2: (ADC2, DMA2_S2, 1, 1 << 21), 3: (ADC3, DMA2_S1, 2, 1 << 11)}
 OTG = 0x40040000
 FLASH_CR = 0x40023C10
 SECTORS = [(0x08000000, 16), (0x08004000, 16), (0x08008000, 16), (0x0800C000, 16),
@@ -98,11 +117,14 @@ class CfwPeriph(Periph):
 
     def __init__(self):
         super().__init__()
-        self.adc_started = False
+        self.started: set[int] = set()         # ADCs with a sequence started
+        self.adc_absent = False                # test hook: no ADC2/ADC3 on this chip
         self.erases: list[int] = []
         self.gintsts = 0
 
     def get(self, a):
+        if self.adc_absent and ADC2 <= a < ADC3 + 0x100:
+            return 0
         if a == 0x40023800:
             v = self.regs.get(a, 0x83)
             v = (v & ~((1 << 1) | (1 << 17) | (1 << 25) | (1 << 27)))
@@ -122,9 +144,14 @@ class CfwPeriph(Periph):
     def write(self, uc, addr, size, value):
         super().write(uc, addr, size, value)
         a = addr & ~3
-        if a == ADC1 + 8 and value & (1 << 30):
-            self.adc_started = True
-            self.regs[a] &= ~(1 << 30)        # SWSTART clears itself as the sequence starts
+        for n, (base, _, _, _) in ADC_DMA.items():
+            if a == base + 8 and value & (1 << 30):
+                self.started.add(n)
+                self.regs[a] &= ~(1 << 30)    # SWSTART clears itself as the sequence starts
+        if self.adc_absent and ADC2 <= a < ADC3 + 0x100:
+            self.regs.pop(a, None)
+        if a == DMA2 + 8:                     # LIFCR: write 1 to clear the LISR flag
+            self.regs[DMA2] = self.regs.get(DMA2, 0) & ~value
         if a == FLASH_CR and value & (1 << 16) and value & 2:     # STRT with SER
             sector = (self.regs.get(FLASH_CR, 0) >> 3) & 0xF
             self.erases.append(sector)
@@ -169,7 +196,11 @@ class Cfw:
         uc.hook_add(UC_HOOK_MEM_WRITE, self._on_flash_write, begin=0x08000000, end=0x0807FFFF)
         self.p.quiet = True
         self.drop_adc = False                  # test hook: conversions never complete
+        self.dead_adcs: set[int] = set()       # test hook: these ADCs never deliver a result
+        # test hook: (parallel read, settle ticks, sample code, row, col) -> counts added
+        self.timing_effect = None
         self.col_log: list[int | None] = []
+        self.conv_log = collections.deque(maxlen=4096)   # (column, {ADC: [channels]})
         self.ticks = 0
         self.in_bootloader = False
         self.fault: str | None = None
@@ -273,33 +304,56 @@ class Cfw:
         self.pc = f[6]
 
     def deliver_adc(self):
+        """One column: every started ADC converts its sequence and its DMA
+        stream stores the results; ADC1's stream then raises its interrupt."""
         regs = self.p.regs
-        if not self.p.adc_started or not (regs.get(DMA2_S0, 0) & 1):
+        if 1 not in self.p.started or not (regs.get(DMA2_S0, 0) & 1):
             return False
-        self.p.adc_started = False
+        started, self.p.started = self.p.started, set()
         if self.drop_adc:
             return False
-        n = regs.get(DMA2_S0 + 4, 0)
-        m0 = regs.get(DMA2_S0 + 0xC, 0)
-        sqr3, sqr2 = regs.get(ADC1 + 0x34, 0), regs.get(ADC1 + 0x30, 0)
         cols = self.active_cols()
-        self.col_log.append(cols[0] if len(cols) == 1 else None)
-        vals = []
-        for rank in range(n):
-            ch = ((sqr3 >> (5 * rank)) if rank < 6 else (sqr2 >> (5 * (rank - 6)))) & 0x1F
-            row = ROW_CH.get(ch)
-            if row is None or len(cols) != 1:
-                vals.append(0)
+        col = cols[0] if len(cols) == 1 else None
+        self.col_log.append(col)
+        ticks = regs.get(TIM10 + 0x2C, 0) + 1
+        conv = {}
+        for n in sorted(started):
+            base, stream, chsel, tcif = ADC_DMA[n]
+            cr2, scr = regs.get(base + 8, 0), regs.get(stream, 0)
+            # on, DMA requests on, its stream enabled on the right request
+            # channel and reading this ADC's data register
+            if (n in self.dead_adcs or not cr2 & 1 or not cr2 & (1 << 8) or not scr & 1
+                    or (scr >> 25) & 7 != chsel or regs.get(stream + 8, 0) != base + 0x4C):
                 continue
-            c = cols[0]
-            v = self.rest[row][c] + self.press.get((row, c), 0)
-            vals.append(max(0, min(4095, v)))
-        self.uc.mem_write(m0, struct.pack('<%dH' % n, *vals))
-        if not regs.get(DMA2_S0, 0) & (1 << 8):     # circular streams reload NDTR
-            regs[DMA2_S0 + 4] = 0
-        regs[0x40026400] = 0x20                     # LISR: TCIF0
+            ndtr = regs.get(stream + 4, 0)
+            m0 = regs.get(stream + 0xC, 0)
+            length = ((regs.get(base + 0x2C, 0) >> 20) & 0xF) + 1
+            sqr3, sqr2 = regs.get(base + 0x34, 0), regs.get(base + 0x30, 0)
+            smpr2 = regs.get(base + 0x10, 0)
+            buf, chans = {}, []
+            for rank in range(length):
+                ch = ((sqr3 >> (5 * rank)) if rank < 6 else (sqr2 >> (5 * (rank - 6)))) & 0x1F
+                chans.append(ch)
+                row = ROW_CH.get(ch)
+                v = 0
+                if row is not None and col is not None:
+                    v = self.rest[row][col] + self.press.get((row, col), 0)
+                    if self.timing_effect:
+                        v += self.timing_effect(len(started) > 1, ticks, (smpr2 >> (3 * ch)) & 7, row, col)
+                    v = max(0, min(4095, v))
+                if ndtr:
+                    buf[rank % ndtr] = v          # the stream wraps after NDTR results
+            for i, v in buf.items():
+                self.uc.mem_write(m0 + 2 * i, struct.pack('<H', v))
+            conv[n] = chans
+            if ndtr and length >= ndtr:
+                regs[DMA2] = regs.get(DMA2, 0) | tcif
+                if not scr & (1 << 8):            # only circular streams reload NDTR
+                    regs[stream + 4] = 0
+        self.conv_log.append((col, conv))
+        if not regs.get(DMA2, 0) & (1 << 5):
+            return False
         self.fire(16 + 56)                          # DMA2_Stream0
-        regs[0x40026400] = 0
         return True
 
     def step(self, instructions=3000, ticks=1):
@@ -776,6 +830,8 @@ def main():
     stick_v72(gamepad, syms, kidx)
     firmware_info_v72(image, syms, rest, build_id)
     scan_speed_v73(image, syms, rest, build_id, keys, kidx)
+    timing_test_v74(image, syms, rest, build_id, keys, kidx)
+    scan_v74(image, syms, rest, build_id, keys, kidx, Path(sys.argv[4]))
 
     print('[9] flash integrity across all runs: checked per scenario above')
     failed = [w for ok, w in results if not ok]
@@ -1768,9 +1824,9 @@ def stick_v72(gamepad, syms, kidx):
 
 
 def firmware_info_v72(image, syms, rest, build_id):
-    """[18] GET_FIRMWARE_INFO and the release marker (v7.2; release 7.3.0 now)."""
+    """[18] GET_FIRMWARE_INFO and the release marker (v7.2; release 7.4.0 now)."""
     print('[18] firmware info v7.2 (release, build ID, marker in the image)')
-    GET_FIRMWARE_INFO, MARKER = 0x67, b'MAD68CFW v7.3.0'
+    GET_FIRMWARE_INFO, MARKER = 0x67, b'MAD68CFW v7.4.0'
     e = Cfw(image, syms, rest, journal=struct.pack('<I', build_id))
     e.stub_usb_host()
     e.run_until(lambda: e.r8('baseline_ready') == 1 and e.p.regs.get(OTG + 0x18, 0) != 0, 3000)
@@ -1786,15 +1842,15 @@ def firmware_info_v72(image, syms, rest, build_id):
 
     r = command([GET_FIRMWARE_INFO])
     bid = struct.unpack_from('<I', r, 4)[0]
-    check(r[0] == GET_FIRMWARE_INFO and tuple(r[1:4]) == (7, 3, 0),
-          f'GET_FIRMWARE_INFO reports release 7.3.0 ({tuple(r[1:4])}, reply {r[0]:#x})')
+    check(r[0] == GET_FIRMWARE_INFO and tuple(r[1:4]) == (7, 4, 0),
+          f'GET_FIRMWARE_INFO reports release 7.4.0 ({tuple(r[1:4])}, reply {r[0]:#x})')
     check(bid == build_id, f'and the ID of this build ({bid:#010x} vs {build_id:#010x})')
     check(r[8:32] == MARKER + bytes(24 - len(MARKER)),
           f'and the marker, zero-padded over whatever was in the buffer ({r[8:32]!r})')
     check(image.count(MARKER + bytes(1)) == 1,
           f'the marker is in the image exactly once, so the app can read the release from a file ({image.count(MARKER)})')
-    r = command([0x6A])
-    check(r[0] == 0xFF, f'the next unused board command (0x6A) is still refused ({r[0]:#x})')
+    r = command([0x6D])
+    check(r[0] == 0xFF, f'the next unused board command (0x6D) is still refused ({r[0]:#x})')
     bad = [hex(a) for a in e.flash_report() if not (0x08040000 <= a < 0x08080000)]
     check(not bad, f'no flash changed outside sectors 6/7 {bad}')
 
@@ -1838,8 +1894,9 @@ def scan_speed_v73(image, syms, rest, build_id, keys, kidx):
 
     # --- defaults and the register setup ---
     r = command(e, [GET])
-    check(r[0] == GET and r[1] == 1 and r[2] == 1 and r[3] == 4 and list(r[7:11]) == SETTLE and not any(r[11:32]),
-          f'GET_SCAN: protocol 1, Standard (1) of 4 speeds, settle times 40/28/18/8 us, rest of the reply cleared: {r[:12].hex(" ")}')
+    check(r[0] == GET and r[1] == 2 and r[2] == 1 and r[3] == 7 and list(r[7:11]) == SETTLE and not any(r[26:32]),
+          f'GET_SCAN: Standard (1), the four one-ADC speeds first with settle times 40/28/18/8 us, rest of the reply '
+          f'cleared: {r[:12].hex(" ")}')
     check(R(e, TIM10 + 0x2C) == arr(28) and R(e, TIM10) & 8 and R(e, TIM10 + 0x28) == 0 and R(e, TIM10 + 0xC) & 1,
           f'TIM10: one-pulse, 28 us settle at 168 MHz (ARR {R(e, TIM10 + 0x2C)} = {arr(28)}), update interrupt')
     dcr = R(e, DMA2_S0)
@@ -1895,8 +1952,8 @@ def scan_speed_v73(image, syms, rest, build_id, keys, kidx):
     n = len([1 for t, _ in rgb_records(e) if t == 3])
     command(e, [SET, 3])
     check(len([1 for t, _ in rgb_records(e) if t == 3]) == n, 'setting the same speed again writes nothing')
-    r = command(e, [SET, 4])
-    check(r[0] == 0xFF and command(e, [GET])[2] == 3, f'unknown speed 4 refused, speed unchanged ({r[0]:#x})')
+    r = command(e, [SET, 7])
+    check(r[0] == 0xFF and command(e, [GET])[2] == 3, f'unknown speed 7 refused, speed unchanged ({r[0]:#x})')
 
     # A shorter settle can read every sensor slightly lower: rest values follow
     shifted = [[v - 40 if v < 4095 else v for v in row] for row in rest]
@@ -1949,6 +2006,910 @@ def scan_speed_v73(image, syms, rest, build_id, keys, kidx):
           'rest values intact and no key pressed after the stall')
     bad = [hex(a) for a in e.flash_report() + e2.flash_report() if not (0x08040000 <= a < 0x08080000)]
     check(not bad, f'no flash changed outside sectors 6/7 {bad}')
+
+
+def timing_test_v74(image, syms, rest, build_id, keys, kidx):
+    """[20] Timing test (v7.4 test build): SCAN_PROBE / SCAN_STATUS. A probe
+    measures at another timing with the keys left on their old readings; the
+    parallel read uses ADC1, ADC2 and ADC3 with a DMA stream each; the next
+    column can be powered before the results are stored; a timing only goes
+    live if the readings stay put, and is given up when an ADC is missing or
+    dies or the scan stops. Nothing of it is saved."""
+    print('[20] timing test v7.4 (probes, parallel read on three ADCs, go live, fall back)')
+    PROBE, STATUS, GET, SET = 0x6A, 0x6B, 0x68, 0x69
+    NONE, RUNNING, DONE, FAILED = 0, 1, 2, 3
+    E_NO_ADC, E_FAULTS, E_STALL, E_SHIFT, E_REPLACED = 1, 2, 3, 4, 5
+    F_TUNED, F_ADC23, F_FELL_BACK = 1, 2, 4
+    US = 168                                          # TIM10 ticks per microsecond
+    PAR = 3                                           # mode: three ADCs, next column powered first
+    MODES = {0: 'one ADC, results stored first (v7.3)', 1: 'three ADCs, results stored first',
+             2: 'one ADC, next column first', 3: 'three ADCs, next column first'}
+    STEP = 3000                                       # emulated cycles per column
+
+    def boot(journal, rest_values=rest):
+        e = Cfw(image, syms, rest_values, journal=journal)
+        e.stub_usb_host()
+        e.run_until(lambda: e.r8('baseline_ready') == 1 and e.p.regs.get(OTG + 0x18, 0) != 0, 3000)
+        e.run_until(lambda: False, 50)
+        return e
+
+    def command(e, payload):
+        scratch = (syms['_ebss'] + 0x100) & ~3
+        e.uc.mem_write(scratch, bytes(payload) + bytes(64 - len(payload)))
+        e.uc.mem_write(syms['out_buf'], bytes([0]) + bytes([0xAA]) * 63)   # junk the reply must clear
+        enqueue(e, scratch)
+        e.run_until(lambda: e.uc.mem_read(syms['out_buf'], 1)[0] != 0, 400)
+        return bytes(e.uc.mem_read(syms['out_buf'], 64))
+
+    def parse(r):
+        w = lambda i: r[i] | r[i + 1] << 8            # noqa: E731
+        return dict(reply=r[0], proto=r[1], mode=r[2], ticks=w(3), sample=r[5], flags=r[6], state=r[7],
+                    err=r[8], pmode=r[9], pticks=w(10), psample=r[12], plog2=r[13],
+                    cycles=int.from_bytes(r[14:18], 'little'), shift=w(18), shift_key=r[20],
+                    pfaults=w(21), faults=w(23), sync=w(25), overruns=w(27), stalls=w(29), rate=w(31),
+                    loops=int.from_bytes(r[33:36], 'little'), tpu=r[36], speed=r[37], tail=r[38:])
+
+    def status(e):
+        return parse(command(e, [STATUS, 0]))
+
+    def probe(e, mode, us, sample=2, log2=4, live=0):
+        t = round(us * US)
+        return command(e, [PROBE, mode, t & 0xFF, t >> 8, sample, log2, live])
+
+    def finish(e, limit=1500):
+        e.run_until(lambda: e.r8('probe_state') != RUNNING, limit)
+        return status(e)
+
+    def results(e):
+        out = []
+        for first in range(0, 68, 10):
+            r = command(e, [STATUS, 1, first])
+            if r[0] != STATUS or r[2] != first:
+                return None
+            out += [struct.unpack_from('<HHH', r, 4 + 6 * i) for i in range(r[3])]
+        return out
+
+    def wait_capture(e):
+        e.run_until(lambda: e.r8('baseline_pass') == 0xFF, 800)
+
+    def baseline_err(e, rest_now=rest, skip=()):
+        bl = [e.r16(syms['baseline'] + 2 * i) for i in range(68)]
+        return max(abs(bl[kidx[rc]] - rest_now[rc[0]][rc[1]]) for rc in keys if rc not in skip)
+
+    def raw(e):
+        return [e.r16(syms['adc_raw'] + 2 * i) for i in range(68)]
+
+    def pressed(e):
+        return [i for i in range(68) if e.is_pressed(i)]
+
+    def run_watching(e, steps):
+        """Run and collect every key that reads as pressed at any point."""
+        seen = set()
+        for _ in range(steps):
+            e.step()
+            seen.update(pressed(e))
+            travel[0] = max(travel[0], max(e.r8('key_matrix', k * 10 + 6) for k in range(68)))
+        return sorted(seen)
+
+    travel = [0]                                      # deepest travel (0-255) any key showed in run_watching
+
+    def store_order(e, columns=24):
+        """For each of some columns: True if its results were stored before
+        the next column's settle timer was started, False if after."""
+        state = {'dma': False, 'snap': None}
+        fire, write, plain = e.fire, e.p.write, e.rest
+
+        def w(uc, addr, size, value):
+            if state['dma'] and state['snap'] is None and addr & ~3 == TIM10 and value & 1:
+                state['snap'] = raw(e)
+            write(uc, addr, size, value)
+
+        def f(vector):
+            state['dma'] = vector == 16 + 56
+            try:
+                fire(vector)
+            finally:
+                state['dma'] = False
+        e.p.write, e.fire = w, f
+        out = []
+        for i in range(columns):
+            # every column reads a little differently from the last time it was read
+            e.rest = [[v + i + 1 if v < 4095 else v for v in row] for row in plain]
+            state['snap'] = None
+            n = len(e.col_log)
+            e.step()
+            if len(e.col_log) == n or e.col_log[-1] is None or state['snap'] is None:
+                continue
+            c = e.col_log[-1]
+            ks = [(kidx[(r, c)], e.rest[r][c]) for r in range(ROWS) if (r, c) in kidx]
+            after = raw(e)
+            if any(after[k] != v for k, v in ks):
+                out.append(None)                      # not stored at all
+            else:
+                out.append(all(state['snap'][k] == v for k, v in ks))
+        e.p.write, e.fire, e.rest = write, fire, plain
+        return out
+
+    def seq(e, base):
+        n = ((R(e, base + 0x2C) >> 20) & 0xF) + 1
+        return [(R(e, base + 0x34) >> (5 * i)) & 0x1F for i in range(n)]
+
+    def single_setup(e):
+        return (seq(e, ADC1) == [3, 2, 1, 0, 7] and R(e, DMA2_S0 + 4) == 5
+                and R(e, DMA2_S0 + 0xC) == syms['adc_buffer'] and R(e, ADC1 + 8) & 0x301 == 0x301)
+
+    R = lambda e, a: e.p.regs.get(a, 0)              # noqa: E731
+    cc = lambda e: e.r32(syms['column_count'])       # noqa: E731
+    arr = lambda us: round(us * US) - 1              # noqa: E731
+    EXTRA = (ADC2, ADC3 + 0x100), (DMA2_S1, DMA2_S2 + 0x18)   # ADC2/ADC3 and their DMA streams
+    touched = lambda e: [hex(a) for _, _, k, a, _, _ in e.p.log   # noqa: E731
+                         if k == 'W' and any(lo <= a < hi for lo, hi in EXTRA)]
+
+    # --- a keyboard that never runs a probe reads its keys as v7.3 does ---
+    e = boot(struct.pack('<I', build_id))
+    st = status(e)
+    check(st['reply'] == STATUS and st['proto'] == 2 and (st['mode'], st['ticks'], st['sample']) == (0, 28 * US, 2)
+          and st['flags'] == 0 and st['state'] == NONE and st['tpu'] == US and st['speed'] == 1 and not any(st['tail']),
+          f"SCAN_STATUS after start-up: one ADC, 28 us, 28-cycle samples, nothing tuned, no probe ({st['mode']}, "
+          f"{st['ticks']}, {st['sample']}, flags {st['flags']})")
+    check(not touched(e) and not R(e, 0x40023844) & (3 << 9),
+          f'start-up never touches ADC2, ADC3 or their DMA streams, and leaves their clocks off ({touched(e)[:4]})')
+    e.run_until(lambda: status(e)['loops'] > 0, 1200)
+    check(status(e)['loops'] > 0, f"main loop passes per second are counted ({status(e)['loops']}/s in the emulator)")
+
+    # --- refused requests change nothing ---
+    before = R(e, TIM10 + 0x2C)
+    bad = {'mode 4': [PROBE, 4, 0x40, 5, 2, 4, 0], 'sample code 8': [PROBE, 0, 0x40, 5, 8, 4, 0],
+           'settle of 7 ticks': [PROBE, 0, 7, 0, 2, 4, 0], '8 scans': [PROBE, 0, 0x40, 5, 2, 3, 0],
+           '8,192 scans': [PROBE, 0, 0x40, 5, 2, 13, 0], 'go-live value 2': [PROBE, 0, 0x40, 5, 2, 4, 2],
+           'status request 4': [STATUS, 4], 'results from key 68': [STATUS, 1, 68]}
+    refused = {why: command(e, c)[0] for why, c in bad.items()}
+    check(all(v == 0xFF for v in refused.values()) and R(e, TIM10 + 0x2C) == before and status(e)['state'] == NONE,
+          f'out-of-range requests are refused and change nothing ({[w for w, v in refused.items() if v != 0xFF]})')
+
+    # --- a probe on one ADC at a shorter settle, where every sensor reads 60 lower ---
+    e.timing_effect = lambda par, ticks, code, r, c: -60 if ticks < 28 * US else 0
+    frozen = raw(e)
+    r = probe(e, 0, 8, log2=6)
+    st = parse(r)
+    check(r[0] == PROBE and st['state'] == RUNNING
+          and (st['pmode'], st['pticks'], st['psample'], st['plog2']) == (0, 8 * US, 2, 6)
+          and (st['mode'], st['ticks']) == (0, 28 * US),
+          f"SCAN_PROBE replies with the status: running at 8 us, live timing still 28 us ({r[:14].hex(' ')})")
+    check(R(e, TIM10 + 0x2C) == arr(8), f'the settle timer is on the probe timing while it runs (ARR {R(e, TIM10 + 0x2C)})')
+    check(probe(e, 0, 18)[0] == 0xFF and command(e, [STATUS, 1, 0])[3] == 0,
+          'a second probe is refused while one runs, and no results are handed out yet')
+    w = (1, 2)
+    e.press[w] = -900                                 # W goes down during the probe
+    seen = run_watching(e, 300)
+    check(raw(e) == frozen and not seen and e.r8('probe_state') == RUNNING,
+          f'while it runs the keys stay on their readings from before: nothing changes, nothing presses ({seen})')
+    e.press.pop(w)
+    st = finish(e)
+    check(st['state'] == DONE and st['err'] == 0 and st['pfaults'] == 0 and st['cycles'] == 64 * COLS * STEP,
+          f"it ends by itself after 64 full scans, timed with the cycle counter ({st['cycles']} cycles, "
+          f"{64 * COLS * STEP} expected)")
+    check(R(e, TIM10 + 0x2C) == arr(28) and single_setup(e)
+          and (st['mode'], st['ticks'], st['flags'] & F_TUNED) == (0, 28 * US, 0),
+          f'and the keyboard is back on its own timing (ARR {R(e, TIM10 + 0x2C)})')
+    res = results(e)
+    got = {rc: res[kidx[rc]] for rc in keys} if res else {}
+    quiet = [rc for rc in keys if rc != w]
+    check(res is not None and len(res) == 68
+          and all(got[rc] == ((rest[rc[0]][rc[1]] - 60) * 16,) + (rest[rc[0]][rc[1]] - 60,) * 2 for rc in quiet),
+          'results: average x 16, lowest and highest raw reading of every key, each 60 below its rest value')
+    lo, hi = got[w][1], got[w][2]
+    check(lo == rest[1][2] - 960 and hi == rest[1][2] - 60 and lo * 16 < got[w][0] < hi * 16,
+          f'and W, pressed part of the time, shows its lowest and highest reading ({lo}..{hi})')
+    check(st['shift'] >= 60 and baseline_err(e) <= 2 and not pressed(e),
+          f"largest move from the live readings reported ({st['shift']} counts, key {st['shift_key']}); rest values untouched")
+    e.run_until(lambda: False, 60)
+    check(not pressed(e) and max(abs(a - b) for a, b in zip(raw(e), frozen)) <= 2,
+          'after the probe the keys read live again, as before')
+
+    # --- sample time is part of a timing ---
+    probe(e, 0, 28, sample=1)
+    smp = R(e, ADC1 + 0x10)
+    check(all((smp >> (3 * ch)) & 7 == 1 for ch in (0, 1, 2, 3, 7)),
+          f'a probe with sample code 1 sets 15-cycle samples (SMPR2 0x{smp:08x})')
+    finish(e)
+    smp = R(e, ADC1 + 0x10)
+    check(all((smp >> (3 * ch)) & 7 == 2 for ch in (0, 1, 2, 3, 7)), 'and 28 cycles are back afterwards')
+    e.timing_effect = None
+
+    # --- parallel read: three ADCs, a DMA stream each ---
+    uniq = [[4095 if rest[r][c] == 4095 else 1500 + 300 * r + 11 * c for c in range(COLS)] for r in range(ROWS)]
+    e = boot(struct.pack('<I', build_id), uniq)
+    r = probe(e, PAR, 8, log2=4)
+    st = parse(r)
+    e.p.log.clear()                                   # from here on every column is a parallel read
+    e.conv_log.clear()
+    check(r[0] == PROBE and st['state'] == RUNNING and st['flags'] & F_ADC23 and R(e, 0x40023844) & (3 << 9) == 3 << 9,
+          f"parallel probe: ADC2 and ADC3 clocked and found (flags {st['flags']}, APB2ENR 0x{R(e, 0x40023844):08x})")
+    s1, s2, s3 = seq(e, ADC1), seq(e, ADC2), seq(e, ADC3)
+    check((s1, s2, s3) == ([3, 0], [2, 7], [1]),
+          f'sequences: ADC1 PA3,PA0 (rows 0,3)  ADC2 PA2,PA7 (rows 1,4)  ADC3 PA1 (row 2): {s1} {s2} {s3}')
+    smp = [R(e, b + 0x10) for b in (ADC1, ADC2, ADC3)]
+    check(all((smp[i] >> (3 * ch)) & 7 == 2 for i, chs in enumerate((s1, s2, s3)) for ch in chs),
+          '28-cycle samples on every channel of every ADC')
+    buf = syms['adc_buffer']
+    d = {n: (R(e, st_), R(e, st_ + 4), R(e, st_ + 8), R(e, st_ + 0xC)) for n, (_, st_, _, _) in ADC_DMA.items()}
+    ok = all(cr & 1 and cr & (1 << 8) and (cr >> 25) & 7 == ADC_DMA[n][2] and par == ADC_DMA[n][0] + 0x4C
+             for n, (cr, _, par, _) in d.items())
+    check(ok and (d[1][1], d[1][3]) == (2, buf) and (d[2][1], d[2][3]) == (2, buf + 4) and (d[3][1], d[3][3]) == (1, buf + 8),
+          f'DMA2 streams 0/2/1 on request channels 0/1/2: ADC1 -> slots 0-1, ADC2 -> slots 2-3, ADC3 -> slot 4, circular '
+          f'({[(hex(cr), n_) for cr, n_, _, _ in d.values()]})')
+    check(d[1][0] & 0x1E == 0x16 and not d[2][0] & 0x1E and not d[3][0] & 0x1E
+          and (d[2][0] >> 16) & 3 == 3 and (d[3][0] >> 16) & 3 == 3 and (d[1][0] >> 16) & 3 == 2,
+          "only ADC1's stream raises interrupts; ADC2 and ADC3 deliver at a higher priority, so first")
+    c2 = [(R(e, b + 4), R(e, b + 8)) for b in (ADC2, ADC3)]
+    check(all(cr1 == (1 << 8) | (1 << 26) and cr2 == 0x301 for cr1, cr2 in c2),
+          f'ADC2 and ADC3: 12-bit sequence, overrun interrupt, DMA with continuous requests, on ({c2})')
+    e.run_until(lambda: len(e.conv_log) >= 40, 200)
+    col_bits = {(PORT[p] + 0x18, 1 << (b + 16)) for p, b in COL_PINS}
+    tim_isr = syms['TIM1_UP_TIM10_IRQHandler'] & ~1
+    after = sorted(a & ~1 for a in syms.values() if a & ~1 > tim_isr and a < 0x08080000)[0]
+    order, bad, starts, armed, switched = [], [], 0, False, False
+    for q, pc, k, a, size, v in e.p.log:
+        if k != 'W':
+            continue
+        if any(a == ba and v & bit for ba, bit in col_bits):
+            order, armed, switched = [], False, True
+        elif a == TIM10 and v & 1:
+            armed = True
+        elif v & (1 << 30) and a in (ADC1 + 8, ADC2 + 8, ADC3 + 8) and switched:   # whole columns only
+            order.append({ADC1 + 8: 1, ADC2 + 8: 2, ADC3 + 8: 3}[a])
+            if not (armed and tim_isr <= pc < after):
+                bad.append(q)
+            if a == ADC1 + 8:
+                starts += 1
+                if order != [3, 2, 1]:
+                    bad.append(q)
+    check(starts >= 30 and not bad,
+          f'each of {starts} columns: after the column switch and settle, the timer interrupt starts ADC3, ADC2, '
+          f'then ADC1 ({len(bad)} not)')
+    convs = [c for col, c in e.conv_log if col is not None][-30:]
+    check(all(c == {1: [3, 0], 2: [2, 7], 3: [1]} for c in convs),
+          'every column: each of the five rows converted exactly once')
+    st = finish(e)
+    res = results(e)
+    wrong = [rc for rc in keys if res[kidx[rc]] != (uniq[rc[0]][rc[1]] * 16,) + (uniq[rc[0]][rc[1]],) * 2]
+    check(st['state'] == DONE and st['pfaults'] == 0 and st['faults'] == 0 and not wrong,
+          f'every key gets the reading of its own sensor (68 different rest values; wrong: {wrong[:5]})')
+    check(st['cycles'] == 16 * COLS * STEP and st['shift'] <= 2,
+          f"16 scans timed, readings where the live ones are ({st['shift']})")
+    off = ([R(e, b + 8) & 1 for b in (ADC2, ADC3)] + [R(e, s_) & 1 for s_ in (DMA2_S1, DMA2_S2)]
+           + [R(e, b + 4) for b in (ADC2, ADC3)])
+    check(single_setup(e) and not any(off) and baseline_err(e, uniq) <= 2 and not pressed(e),
+          f'afterwards: ADC1 back on all five rows; ADC2/ADC3 off with their interrupts and streams disabled ({off}); '
+          f'rest values intact')
+
+    # --- every mode reads every key from its own sensor, probed and live ---
+    slots = (((0, 1), -900), ((3, 2), -900), ((1, 2), -900), ((4, 6), +900), ((2, 4), -900))
+    for mode in (2, 1, 3):
+        e = boot(struct.pack('<I', build_id), uniq)
+        e.p.log.clear()
+        probe(e, mode, 8)
+        st = finish(e)
+        res = results(e)
+        wrong = [rc for rc in keys if res[kidx[rc]] != (uniq[rc[0]][rc[1]] * 16,) + (uniq[rc[0]][rc[1]],) * 2]
+        check(st['state'] == DONE and st['pfaults'] == 0 and st['cycles'] == 16 * COLS * STEP and not wrong
+              and (mode & 1 or not touched(e)),
+              f'mode {mode} ({MODES[mode]}): a probe reads every key from its own sensor'
+              + ('' if mode & 1 else ', ADC2 and ADC3 untouched') + f' (wrong: {wrong[:5]})')
+        probe(e, mode, 8, live=1)
+        seen = run_watching(e, 320)
+        st = status(e)
+        wait_capture(e)
+        seen += run_watching(e, 40)
+        hits = []
+        for rc, delta in slots:
+            k = kidx[rc]
+            e.press[rc] = delta
+            e.run_until(lambda: e.is_pressed(k), 400)
+            hits.append(pressed(e) == [k])
+            e.press.pop(rc)
+            e.run_until(lambda: not e.is_pressed(k), 400)
+            hits.append(not pressed(e))
+        check(st['flags'] & F_TUNED and st['mode'] == mode and baseline_err(e, uniq) <= 2 and not seen and all(hits),
+              f'mode {mode} live: rest values right, and a key in each result slot registers alone and releases')
+        order = store_order(e)
+        check(len(order) >= 20 and all(o is (not mode & 2) for o in order),
+              f'mode {mode}: results are stored ' + ('after' if mode & 2 else 'before')
+              + f' the next column is powered and its settle timer started ({len(order)} columns)')
+        command(e, [SET, 1])
+        wait_capture(e)
+        order = store_order(e)
+        check(single_setup(e) and status(e)['mode'] == 0 and len(order) >= 20 and all(o is True for o in order)
+              and baseline_err(e, uniq) <= 2 and not pressed(e),
+              'back on a scan speed: one ADC, results stored first, as v7.3')
+
+    # --- going live with the parallel read ---
+    e = boot(struct.pack('<I', build_id))
+    probe(e, PAR, 8, live=1)
+    seen = run_watching(e, 60)
+    st = finish(e)
+    check(st['state'] == DONE and st['flags'] & F_TUNED and (st['mode'], st['ticks'], st['sample']) == (PAR, 8 * US, 2)
+          and not seen,
+          f"go live: after 16 scans with the readings in place the keyboard keeps the timing (flags {st['flags']}, "
+          f"shift {st['shift']})")
+    check(command(e, [GET])[6] == 1, 'and captures every rest value again')
+    wait_capture(e)
+    seen = run_watching(e, 80)
+    check(baseline_err(e) <= 2 and not seen, f'rest values match the sensors, no key pressed ({seen})')
+    for rc, delta, label in (((0, 1), -900, '1 (row 0: ADC1, first)'), ((3, 2), -900, 'Z (row 3: ADC1, second)'),
+                             ((1, 2), -900, 'W (row 1: ADC2, first)'), ((4, 6), +900, 'Space (row 4: ADC2, second)'),
+                             ((2, 4), -900, 'F (row 2: ADC3)')):
+        k = kidx[rc]
+        e.press[rc] = delta
+        e.run_until(lambda: e.is_pressed(k), 400)
+        others = [i for i in pressed(e) if i != k]
+        hit = e.is_pressed(k)
+        e.press.pop(rc)
+        e.run_until(lambda: not e.is_pressed(k), 400)
+        check(hit and not others and not e.is_pressed(k), f'{label}: registers alone and releases ({others})')
+    e.run_until(lambda: False, 1000)
+    g = command(e, [GET])
+    want = round(168e6 / (COLS * STEP))
+    check(g[2] == 1 and abs((g[4] | g[5] << 8) - want) <= 2 and status(e)['rate'] == g[4] | g[5] << 8,
+          f"GET_SCAN still answers: saved speed unchanged (Standard), rate measured ({g[4] | g[5] << 8}/s)")
+    check(not [pl for t, pl in rgb_records(e) if t == 3], 'a live timing is not saved')
+    sector6 = bytes(e.uc.mem_read(0x08040000, 0x20000))
+    e2 = boot(sector6)
+    st2 = status(e2)
+    check((st2['mode'], st2['ticks'], st2['flags']) == (0, 28 * US, 0) and not touched(e2) and single_setup(e2),
+          'after a restart the keyboard is back on its saved scan speed, ADC2 and ADC3 untouched')
+
+    # a scan speed set from the app takes over from a live timing
+    g = command(e, [SET, 3])
+    st = status(e)
+    check(g[0] == SET and g[2] == 3
+          and (st['mode'], st['ticks'], st['flags'] & (F_TUNED | F_FELL_BACK)) == (0, 8 * US, 0)
+          and single_setup(e) and R(e, TIM10 + 0x2C) == arr(8),
+          'SET_SCAN while a timing is live: back to one ADC at that speed')
+    wait_capture(e)
+    seen = run_watching(e, 60)
+    check(baseline_err(e) <= 2 and not seen, 'rest values captured again, no key pressed')
+
+    # --- going live is refused when the readings move ---
+    e = boot(struct.pack('<I', build_id))
+    e.timing_effect = lambda par, ticks, code, r, c: -400 if par and r == 2 else 0    # ADC3 reads wrong
+    probe(e, PAR, 8, live=1)
+    seen = run_watching(e, 320)
+    st = status(e)
+    check(st['state'] == FAILED and st['err'] == E_SHIFT and st['shift'] == 400 and keys[st['shift_key']][0] == 2,
+          f"readings of one ADC 400 off: go live refused, the move and a key of that row reported ({st['shift']}, "
+          f"key {st['shift_key']})")
+    check(not seen and not st['flags'] & F_TUNED and (st['mode'], st['ticks']) == (0, 28 * US) and single_setup(e)
+          and baseline_err(e) <= 2,
+          f'the keyboard stays on its own timing and no key ever reads as pressed ({seen})')
+    e.timing_effect = lambda par, ticks, code, r, c: -100 if par else 0               # within the limit
+    probe(e, PAR, 8, live=1)
+    travel[0] = 0
+    seen = run_watching(e, 20)
+    check(e.r8('probe_state') == RUNNING, 'go live with readings 100 lower: probe under way')
+    seen += run_watching(e, 300)
+    st = status(e)
+    shifted = [[v - 100 if v < 4095 else v for v in row] for row in rest]
+    check(st['flags'] & F_TUNED and st['shift'] == 100 and not seen and travel[0] <= 1,
+          f"inside the limit, so it goes live; rest values move with the readings at that instant, so no key's "
+          f"travel moves at all (deepest {travel[0]} of 255, shift {st['shift']})")
+    wait_capture(e)
+    seen += run_watching(e, 60)
+    check(baseline_err(e, shifted) <= 2 and not seen and travel[0] <= 1,
+          f'and the capture that follows settles them on the sensors (error {baseline_err(e, shifted)})')
+    command(e, [SET, 1])
+    seen = run_watching(e, 30)
+    check(not seen and travel[0] <= 1 and (status(e)['mode'], status(e)['flags'] & F_TUNED) == (0, 0),
+          f'leaving it for a scan speed puts the old rest values back at once: again no travel (deepest {travel[0]})')
+    wait_capture(e)
+    check(baseline_err(e) <= 2 and not pressed(e), 'rest values right for the one-ADC readings')
+    e.timing_effect = None
+
+    # --- an ADC that is not there, or stops delivering ---
+    e = boot(struct.pack('<I', build_id))
+    e.p.adc_absent = True
+    before = R(e, TIM10 + 0x2C)
+    r = probe(e, PAR, 8)
+    st = parse(r)
+    c0 = cc(e)
+    seen = run_watching(e, 60)
+    check(r[0] == PROBE and st['state'] == FAILED and st['err'] == E_NO_ADC and not st['flags'] & F_ADC23
+          and R(e, TIM10 + 0x2C) == before and single_setup(e) and cc(e) > c0 + 30 and not seen,
+          f"ADC2/ADC3 registers do not answer: probe fails at once (error {st['err']}), the scan carries on untouched")
+    check(parse(probe(e, 0, 8))['state'] == RUNNING and finish(e)['state'] == DONE, 'a one-ADC probe still works there')
+
+    e = boot(struct.pack('<I', build_id))
+    e.dead_adcs = {2}
+    probe(e, PAR, 8)
+    seen = run_watching(e, 60)
+    st = status(e)
+    c0 = cc(e)
+    seen += run_watching(e, 40)
+    check(st['state'] == FAILED and st['err'] == E_FAULTS and st['pfaults'] == 9 and st['sync'] == 9 and not seen,
+          f"ADC2 never delivers: its results are missed, and after 9 tries the probe gives up ({st['pfaults']} faults, "
+          f"error {st['err']})")
+    check(single_setup(e) and cc(e) > c0 + 30 and baseline_err(e) <= 2 and (st['mode'], st['flags'] & F_TUNED) == (0, 0),
+          'the keyboard is back on its own timing and scanning')
+    e.dead_adcs = set()
+
+    probe(e, PAR, 8, live=1)
+    finish(e)
+    wait_capture(e)
+    check(status(e)['flags'] & F_TUNED, 'parallel read live again (ADC2 working)')
+    e.dead_adcs = {3}
+    seen = run_watching(e, 80)
+    st = status(e)
+    c0 = cc(e)
+    wait_capture(e)
+    seen += run_watching(e, 60)
+    check(st['flags'] & F_FELL_BACK and not st['flags'] & F_TUNED and (st['mode'], st['ticks']) == (0, 28 * US)
+          and single_setup(e) and st['faults'] >= 33,
+          f"ADC3 dies while live: after {st['faults'] - 9} faults the timing is dropped for the saved scan speed "
+          f"(flags {st['flags']})")
+    check(cc(e) > c0 + 30 and baseline_err(e) <= 2 and not seen,
+          f'scanning on one ADC, rest values right, no key ever pressed ({seen})')
+    e.dead_adcs = set()
+
+    # --- the scan stops ---
+    probe(e, PAR, 8, live=1)
+    finish(e)
+    wait_capture(e)
+    e.drop_adc = True
+    seen = run_watching(e, 160)
+    st = status(e)
+    check(st['stalls'] >= 1 and st['flags'] & F_FELL_BACK and not st['flags'] & F_TUNED and single_setup(e),
+          f"no column finishes for 100 ms on a live timing: dropped for the saved scan speed ({st['stalls']} stall)")
+    e.drop_adc = False
+    c0 = cc(e)
+    wait_capture(e)
+    seen += run_watching(e, 60)
+    check(cc(e) > c0 + 30 and baseline_err(e) <= 2 and not seen,
+          'once conversions work again the scan carries on, no key pressed')
+
+    probe(e, 0, 18, log2=8)
+    e.run_until(lambda: False, 30)
+    e.drop_adc = True
+    seen = run_watching(e, 160)
+    st = status(e)
+    e.drop_adc = False
+    check(st['state'] == FAILED and st['err'] == E_STALL and R(e, TIM10 + 0x2C) == arr(28) and not seen,
+          f"the scan stops during a probe: the probe ends (error {st['err']}) and the live timing is set again")
+    c0 = cc(e)
+    e.run_until(lambda: cc(e) > c0 + 30, 300)
+    check(cc(e) > c0 + 30 and not pressed(e), 'and the scan carries on')
+
+    # --- probes and scan speed changes ---
+    probe(e, PAR, 8, log2=8)
+    e.run_until(lambda: False, 40)
+    g = command(e, [SET, 2])
+    st = status(e)
+    check(g[0] == SET and g[2] == 2 and st['state'] == FAILED and st['err'] == E_REPLACED
+          and (st['mode'], st['ticks']) == (0, 18 * US) and single_setup(e) and R(e, TIM10 + 0x2C) == arr(18),
+          f"SET_SCAN during a probe: the probe is dropped (error {st['err']}) and the speed applied")
+    wait_capture(e)
+    check(baseline_err(e) <= 2 and not pressed(e), 'rest values captured at the new speed')
+    command(e, [SET, 1])
+    e.run_until(lambda: e.r8('baseline_pass') not in (0, 0xFF), 200)    # capture under way
+    e.run_until(lambda: False, 37)                                      # ...and part-way through a scan
+    probe(e, 0, 8)
+    finish(e)
+    wait_capture(e)
+    seen = run_watching(e, 60)
+    check(baseline_err(e) <= 2 and not seen,
+          f'a probe in the middle of a rest value capture: the capture starts over and ends right '
+          f'(error {baseline_err(e)})')
+    bad = [hex(a) for a in e.flash_report() + e2.flash_report() if not (0x08040000 <= a < 0x08080000)]
+    check(not bad, f'no flash changed outside sectors 6/7 {bad}')
+
+
+def scan_v74(image, syms, rest, build_id, keys, kidx, base):
+    """[21] v7.4: scan speeds 4-6 read with three ADCs and are only taken when
+    the readings agree; smoothing levels 1-3 filter once per reading."""
+    print('[21] v7.4 (three-ADC scan speeds as saved speeds, per-reading smoothing)')
+    GET, SET, SETF, PROBE, STATUS, ANALOG_INFO = 0x68, 0x69, 0x6C, 0x6A, 0x6B, 5
+    IN_EFFECT, SWITCHING, REFUSED = 0, 1, 2
+    F_TUNED, F_FELL_BACK = 1, 4
+    US, STEP, N = 168, 3000, 7
+    SPEEDS = {4: (3, 8, 2), 5: (3, 5, 2), 6: (3, 5, 1)}     # speed: mode, settle us, sample code
+
+    def boot(journal, rest_values=rest, absent=False, effect=None, watch=None):
+        e = Cfw(image, syms, rest_values, journal=journal)
+        e.p.adc_absent = absent
+        e.timing_effect = effect
+        e.stub_usb_host()
+        seen = set()
+        for _ in range(3000):
+            if e.r8('baseline_ready') == 1 and e.p.regs.get(OTG + 0x18, 0) != 0:
+                break
+            e.step()
+        for _ in range(700):                      # the matrix calibration (500 ms) and a speed switch
+            e.step()
+            if watch is not None:
+                seen.update(i for i in range(68) if e.is_pressed(i))
+        if watch is not None:
+            watch.extend(sorted(seen))
+        return e
+
+    def command(e, payload):
+        scratch = (syms['_ebss'] + 0x100) & ~3
+        e.uc.mem_write(scratch, bytes(payload) + bytes(64 - len(payload)))
+        e.uc.mem_write(syms['out_buf'], bytes([0]) + bytes([0xAA]) * 63)
+        enqueue(e, scratch)
+        e.run_until(lambda: e.uc.mem_read(syms['out_buf'], 1)[0] != 0, 400)
+        return bytes(e.uc.mem_read(syms['out_buf'], 64))
+
+    def scan(e):
+        r = command(e, [GET])
+        return dict(speed=r[2], count=r[3], rate=r[4] | r[5] << 8, busy=r[6], settle=list(r[7:7 + N]),
+                    timing=list(r[7 + N:7 + 2 * N]), state=r[7 + 2 * N], level=r[8 + 2 * N],
+                    levels=r[9 + 2 * N], loops=r[10 + 2 * N] | r[11 + 2 * N] << 8, tail=r[12 + 2 * N:32], raw=r)
+
+    def status(e):
+        r = command(e, [STATUS, 0])
+        w = lambda i: r[i] | r[i + 1] << 8            # noqa: E731
+        return dict(mode=r[2], us=w(3) / US, sample=r[5], flags=r[6], pstate=r[7], err=r[8], faults=w(23),
+                    stalls=w(29), speed=r[37], state=r[38], level=r[39], lag_on=r[40], lag_n=w(41),
+                    lag_mean=w(43), lag_min=w(45), lag_max=w(47))
+
+    def live(e):
+        st = status(e)
+        return st['mode'], st['us'], st['sample']
+
+    def settle(e, limit=900):
+        """Until a speed switch and the rest value capture after it are over."""
+        e.run_until(lambda: e.r8('speed_state') != SWITCHING and e.r8('probe_state') != 1
+                    and e.r8('baseline_pass') == 0xFF, limit)
+
+    def baseline_err(e, rest_now=rest):
+        bl = [e.r16(syms['baseline'] + 2 * i) for i in range(68)]
+        return max(abs(bl[kidx[rc]] - rest_now[rc[0]][rc[1]]) for rc in keys)
+
+    def pressed(e):
+        return [i for i in range(68) if e.is_pressed(i)]
+
+    def filtered(e, k):
+        return e.r16(syms['key_matrix'] + k * 10)
+
+    def travel_of(e, k):
+        return e.r8('key_matrix', k * 10 + 6)
+
+    travel = [0]
+
+    def run_watching(e, steps, **kw):
+        seen = set()
+        for _ in range(steps):
+            e.step(**kw)
+            seen.update(pressed(e))
+            travel[0] = max(travel[0], max(travel_of(e, k) for k in range(68)))
+        return sorted(seen)
+
+    def seq(e, base_):
+        n = ((R(e, base_ + 0x2C) >> 20) & 0xF) + 1
+        return [(R(e, base_ + 0x34) >> (5 * i)) & 0x1F for i in range(n)]
+
+    def single_setup(e):
+        return (seq(e, ADC1) == [3, 2, 1, 0, 7] and R(e, DMA2_S0 + 4) == 5
+                and R(e, ADC1 + 8) & 0x301 == 0x301 and not R(e, ADC2 + 8) & 1 and not R(e, ADC3 + 8) & 1)
+
+    def parallel_setup(e, sample):
+        smp = [R(e, b + 0x10) for b in (ADC1, ADC2, ADC3)]
+        seqs = (seq(e, ADC1), seq(e, ADC2), seq(e, ADC3))
+        return (seqs == ([3, 0], [2, 7], [1])
+                and all((smp[i] >> (3 * ch)) & 7 == sample for i, chs in enumerate(seqs) for ch in chs)
+                and all(R(e, b + 8) & 0x301 == 0x301 for b in (ADC1, ADC2, ADC3)))
+
+    def tap(e, rc, delta=-900):
+        k = kidx[rc]
+        e.press[rc] = delta
+        e.run_until(lambda: e.is_pressed(k), 500)
+        alone = pressed(e) == [k]
+        e.press.pop(rc)
+        e.run_until(lambda: not e.is_pressed(k), 500)
+        return alone and not pressed(e)
+
+    R = lambda e, a: e.p.regs.get(a, 0)              # noqa: E731
+    arr = lambda us: round(us * US) - 1              # noqa: E731
+    cc = lambda e: e.r32(syms['column_count'])       # noqa: E731
+    EXTRA = (ADC2, ADC3 + 0x100), (DMA2_S1, DMA2_S2 + 0x18)
+    touched = lambda e: [hex(a) for _, _, k, a, _, _ in e.p.log   # noqa: E731
+                         if k == 'W' and any(lo <= a < hi for lo, hi in EXTRA)]
+    confirmed = struct.pack('<I', build_id)
+    saved = lambda speed, level=0: confirmed.ljust(0x10000, b'\xff') + rgb_record(3, bytes([speed, level, 0, 0]))  # noqa: E731
+    SLOTS = (((0, 1), -900), ((3, 2), -900), ((1, 2), -900), ((4, 6), +900), ((2, 4), -900))
+
+    # ---------------- scan speeds 4-6 ----------------
+    e = boot(confirmed)
+    g = scan(e)
+    check(g['raw'][1] == 2 and g['speed'] == 1 and g['count'] == N and g['settle'] == [40, 28, 18, 8, 8, 5, 5]
+          and g['timing'] == [0x20] * 4 + [0x23, 0x23, 0x13] and g['state'] == IN_EFFECT
+          and (g['level'], g['levels']) == (0, 4) and g['loops'] > 0 and not any(g['tail']),
+          f"GET_SCAN v2: 7 speeds with their settle time, mode and sample code, the speed in effect, smoothing 0 of 4, "
+          f"main loop rate ({g['raw'][:26].hex(' ')})")
+    check(command(e, [SET, 7])[0] == 0xFF and command(e, [SETF, 4])[0] == 0xFF and scan(e)['speed'] == 1,
+          'speed 7 and smoothing level 4 are refused')
+
+    for speed, (mode, us, sample) in SPEEDS.items():
+        travel[0] = 0
+        r = command(e, [SET, speed])
+        g = scan(e)
+        check(r[0] == SET and r[2] == speed and r[6] == 1 and r[7 + 2 * N] == SWITCHING,
+              f'SET_SCAN {speed}: the reply shows the speed and that the keyboard is switching to it')
+        seen = run_watching(e, 60)
+        settle(e)
+        seen += run_watching(e, 60)
+        g, st = scan(e), status(e)
+        check(g['state'] == IN_EFFECT and g['busy'] == 0 and live(e) == (mode, us, sample) and parallel_setup(e, sample)
+              and R(e, TIM10 + 0x2C) == arr(us) and not st['flags'] & (F_TUNED | F_FELL_BACK),
+              f'speed {speed} in effect: three ADCs, next column first, {us} us, sample code {sample} '
+              f'({live(e)}, ARR {R(e, TIM10 + 0x2C)})')
+        check(not seen and travel[0] <= 1 and baseline_err(e) <= 2,
+              f"no key's travel moved while switching (deepest {travel[0]}), rest values right")
+        recs = [pl for t, pl in rgb_records(e) if t == 3]
+        check(recs and recs[-1] == bytes([speed, 0, 0, 0]), f'saved as [{speed}, 0, 0, 0] ({recs[-1].hex() if recs else None})')
+    check(all(tap(e, rc, d) for rc, d in SLOTS), 'on speed 6 a key in each result slot registers alone and releases')
+
+    # a probe from the timing test, and back
+    t = 40 * US
+    command(e, [PROBE, 0, t & 0xFF, t >> 8, 2, 4, 0])
+    e.run_until(lambda: e.r8('probe_state') != 1, 600)
+    check(status(e)['pstate'] == 2 and live(e) == (3, 5, 1) and parallel_setup(e, 1) and scan(e)['state'] == IN_EFFECT,
+          'a measuring probe on speed 6 returns to speed 6')
+
+    # back to a one-ADC speed
+    travel[0] = 0
+    command(e, [SET, 1])
+    seen = run_watching(e, 40)
+    settle(e)
+    check(live(e) == (0, 28, 2) and single_setup(e) and scan(e)['state'] == IN_EFFECT and not seen and travel[0] <= 1
+          and baseline_err(e) <= 2, f'SET_SCAN 1 from speed 6: one ADC at 28 us again, no travel (deepest {travel[0]})')
+
+    # restart with a three-ADC speed saved
+    watch = []
+    e2 = boot(saved(6), watch=watch)
+    order = [(a, v) for _, _, k, a, _, v in e2.p.log if k == 'W' and (a == TIM10 + 0x2C or ADC2 <= a < ADC3 + 0x100)]
+    first_extra = next((i for i, (a, _) in enumerate(order) if a != TIM10 + 0x2C), None)
+    arrs_before = [v for a, v in order[:first_extra] if a == TIM10 + 0x2C]
+    check(live(e2) == (3, 5, 1) and scan(e2)['state'] == IN_EFFECT and scan(e2)['speed'] == 6 and parallel_setup(e2, 1),
+          f'after a restart with speed 6 saved: speed 6 in effect ({live(e2)})')
+    check(arrs_before and set(arrs_before) == {arr(8)} and not watch and baseline_err(e2) <= 2,
+          f'it starts on one ADC at 8 us and only then asks for three; no key pressed on the way ({watch})')
+    check(all(tap(e2, rc, d) for rc, d in SLOTS), 'and its keys work')
+
+    # an older firmware meets a record it does not know
+    old = base / 'out' / 'MAD68HE_libhmk_v7.3.bin'
+    if old.exists():
+        eo = Cfw(old.read_bytes()[14:-4], {}, rest, journal=saved(5, 2))
+        eo.run_until(lambda: len(eo.col_log) >= 400, 4000)
+        check(R(eo, TIM10 + 0x2C) == arr(28) and len(eo.col_log) >= 400,
+              f'v7.3 with speed 5 and smoothing 2 saved: starts on its default, Standard (ARR {R(eo, TIM10 + 0x2C)})')
+
+    # the readings do not agree: refused
+    bad = lambda par, ticks, code, r, c: -400 if par and r == 2 else 0          # noqa: E731
+    e = boot(confirmed, effect=bad)
+    travel[0] = 0
+    command(e, [SET, 4])
+    seen = run_watching(e, 400)
+    check(scan(e)['state'] == REFUSED and status(e)['err'] == 4, 'one ADC\'s readings 400 off: speed 4 is refused')
+    settle(e)
+    seen += run_watching(e, 60)
+    g, st = scan(e), status(e)
+    check(g['speed'] == 4 and g['state'] == REFUSED and g['busy'] == 0 and live(e) == (0, 8, 2) and single_setup(e)
+          and not st['flags'] & F_TUNED,
+          f"it stays the saved speed but is not in effect; the keyboard runs one ADC at 8 us instead "
+          f"(state {g['state']}, {live(e)})")
+    check(not seen and travel[0] <= 1 and baseline_err(e) <= 2, f'no key ever pressed, no travel (deepest {travel[0]})')
+    e.timing_effect = None
+    command(e, [SET, 4])
+    settle(e)
+    check(scan(e)['state'] == IN_EFFECT and live(e) == (3, 8, 2), 'asked again once the readings agree: in effect')
+
+    watch = []
+    e2 = boot(saved(5), effect=bad, watch=watch)
+    check(scan(e2)['state'] == REFUSED and live(e2) == (0, 8, 2) and single_setup(e2) and not watch
+          and baseline_err(e2) <= 2 and tap(e2, (1, 2)),
+          'the same at start-up with speed 5 saved: refused, one ADC at 8 us, keys work')
+
+    # no ADC2/ADC3 at all
+    watch = []
+    e2 = boot(saved(4), absent=True, watch=watch)
+    check(scan(e2)['state'] == REFUSED and live(e2) == (0, 8, 2) and single_setup(e2) and not watch and tap(e2, (1, 2)),
+          'start-up with speed 4 saved on a chip without ADC2/ADC3: refused at once, one ADC at 8 us, keys work')
+    r = command(e2, [SET, 6])
+    check(r[2] == 6 and scan(e2)['state'] == REFUSED and live(e2) == (0, 8, 2), 'and SET_SCAN 6 there is refused the same way')
+    command(e2, [SET, 2])
+    settle(e2)
+    check(scan(e2)['state'] == IN_EFFECT and live(e2) == (0, 18, 2), 'a one-ADC speed is in effect as always')
+
+    # an ADC dies, or the scan stops, on a three-ADC speed
+    e = boot(saved(4))
+    check(live(e) == (3, 8, 2), 'speed 4 in effect after start-up')
+    e.dead_adcs = {3}
+    travel[0] = 0
+    seen = run_watching(e, 90)
+    st, g = status(e), scan(e)
+    check(g['state'] == REFUSED and st['flags'] & F_FELL_BACK and live(e) == (0, 8, 2) and single_setup(e)
+          and st['faults'] == 33,
+          f"ADC3 stops delivering on speed 4: after {st['faults']} faults the keyboard drops to one ADC at 8 us")
+    settle(e)
+    seen += run_watching(e, 60)
+    check(not seen and travel[0] <= 1 and baseline_err(e) <= 2 and tap(e, (2, 4)),
+          f'no key pressed, no travel (deepest {travel[0]}), and the keys go on working')
+    e.dead_adcs = set()
+    command(e, [SET, 4])
+    settle(e)
+    check(live(e) == (3, 8, 2) and scan(e)['state'] == IN_EFFECT, 'SET_SCAN 4 again brings it back')
+    e.drop_adc = True
+    seen = run_watching(e, 160)
+    e.drop_adc = False
+    check(status(e)['stalls'] >= 1 and scan(e)['state'] == REFUSED and live(e) == (0, 8, 2) and not seen,
+          'the scan stops on speed 4: after 100 ms the keyboard is on one ADC at 8 us')
+    c0 = cc(e)
+    settle(e)
+    check(cc(e) > c0 + 30 and baseline_err(e) <= 2 and not pressed(e), 'and scanning again')
+
+    # ---------------- smoothing ----------------
+    e = boot(confirmed)
+    w = (1, 2)
+    kw = kidx[w]
+    r = command(e, [SETF, 3])
+    recs = [pl for t, pl in rgb_records(e) if t == 3]
+    check(r[0] == SETF and r[8 + 2 * N] == 3 and recs and recs[-1] == bytes([1, 3, 0, 0]),
+          f'SET_SCAN_FILTER 3: replies like GET_SCAN, saved next to the speed ({recs[-1].hex() if recs else None})')
+    command(e, [SET, 3])
+    recs = [pl for t, pl in rgb_records(e) if t == 3]
+    check(recs[-1] == bytes([3, 3, 0, 0]) and scan(e)['level'] == 3, 'a speed change keeps the smoothing level')
+    settle(e)
+
+    # changing level does not move anything
+    travel[0] = 0
+    before = [filtered(e, k) for k in range(68)]
+    seen = []
+    for level in (1, 0, 2, 3, 0):
+        command(e, [SETF, level])
+        seen += run_watching(e, 40)
+    check(not seen and travel[0] == 0 and [filtered(e, k) for k in range(68)] == before,
+          'switching between the levels with the keys at rest: no filtered value or travel changes')
+
+    from unicorn import UC_HOOK_CODE
+    passes = [0]
+
+    def count_pass(uc, addr, size, data):
+        passes[0] += 1
+    task = syms['analog_task'] & ~1
+    e.uc.hook_add(UC_HOOK_CODE, count_pass, begin=task, end=task)      # once per main loop pass
+
+    def readings_to_half(e, level, **kw_step):
+        """Readings taken of W, and main loop passes, from a full press
+        appearing to its filtered value being past half travel."""
+        command(e, [SETF, level])
+        e.run_until(lambda: False, 60)
+        col = w[1]
+        seq_addr = syms['analog_col_seq'] + col
+        rest_v = e.r16(syms['key_matrix'] + kw * 10 + 2)
+        e.run_until(lambda: e.col_log and e.col_log[-1] == col, 40)     # W has just been read
+        s0, p0 = e.uc.mem_read(seq_addr, 1)[0], passes[0]
+        e.press[w] = -900
+        for _ in range(4000):
+            e.step(**kw_step)
+            if filtered(e, kw) >= rest_v + 450:
+                break
+        n = (e.uc.mem_read(seq_addr, 1)[0] - s0) & 0xFF
+        np_ = passes[0] - p0
+        hit = e.run_until(lambda: e.is_pressed(kw), 800, **kw_step)
+        e.press.pop(w)
+        e.run_until(lambda: not e.is_pressed(kw) and filtered(e, kw) <= rest_v + 2, 3000, **kw_step)
+        return n, hit, np_
+
+    got = {level: readings_to_half(e, level) for level in (3, 2, 1)}
+    check([got[level][0] for level in (3, 2, 1)] == [3, 4, 7] and all(v[1] for v in got.values()),
+          f'a full press is past half travel on the 3rd, 4th and 7th reading with levels 3, 2 and 1 '
+          f'(one for the median, then steps of 1/2, 1/4, 1/8): {[got[level][0] for level in (3, 2, 1)]}')
+    slow = {level: readings_to_half(e, level, instructions=150) for level in (3, 2, 1)}
+    check(all(v[0] / max(v[2], 1) >= 2.5 for v in slow.values()) and all(2 <= v[2] <= 6 for v in slow.values()),
+          'with a main loop several times slower than the scan, a pass takes the steps of the readings it missed: '
+          f"past half travel within {[v[2] for v in slow.values()]} passes "
+          f"({[v[0] for v in slow.values()]} readings went by)")
+
+    def glitch(e, rc, level, size=60):
+        """One reading of a resting key `size` counts off; how far its
+        filtered value and travel went."""
+        command(e, [SETF, level])
+        e.run_until(lambda: False, 80)
+        k = kidx[rc]
+        before = filtered(e, k)
+        prev = (rc[1] - 1) % COLS
+        e.run_until(lambda: e.col_log and e.col_log[-1] == prev, 40)
+        e.press[rc] = size
+        e.step()                                       # the one reading
+        e.press.pop(rc)
+        top = deep = 0
+        for _ in range(120):
+            e.step()
+            top = max(top, filtered(e, k) - before)
+            deep = max(deep, travel_of(e, k))
+        return top, deep, pressed(e)
+
+    space = (4, 6)
+    g0 = glitch(e, space, 0)
+    gl = {level: glitch(e, space, level) for level in (1, 2, 3)}
+    check(g0[0] >= 10 and g0[1] > 0, f'one stray reading 60 counts off, classic: the filtered value moves {g0[0]} counts '
+          f'(travel {g0[1]} of 255)')
+    check(all(v[0] == 0 and v[1] == 0 and not v[2] for v in gl.values()),
+          f'levels 1-3: the median drops it, nothing moves ({gl})')
+    gs = glitch(e, space, 3, size=60)
+    check(gs[0] == 0, 'and again with the main loop as it is (nothing accumulates between glitches)')
+
+    # the rise band
+    command(e, [SETF, 2])
+    e.run_until(lambda: False, 80)
+    before = filtered(e, kw)
+    up = lambda d: [[v - d if v < 4095 else v for v in row] for row in rest]     # noqa: E731  W reads lower pressed
+    e.rest = up(6)
+    e.run_until(lambda: False, 200)
+    small = filtered(e, kw) - before
+    e.rest = up(20)
+    e.run_until(lambda: False, 200)
+    big = filtered(e, kw) - before
+    e.rest = rest
+    e.run_until(lambda: False, 500)
+    back = filtered(e, kw) - before
+    check((small, big, back) == (0, 12, 0),
+          f'readings 6 counts up: the filtered value stays; 20 up: it follows 8 below; back down: at once ({small}, {big}, {back})')
+
+    # delay statistics on real presses
+    lag = {}
+    for level in (0, 3, 1):
+        command(e, [SETF, level])
+        e.run_until(lambda: False, 80)
+        r = command(e, [STATUS, 2])
+        e.run_until(lambda: False, 40)
+        for _ in range(2):
+            e.press[w] = -900
+            e.run_until(lambda: e.is_pressed(kw), 800)
+            e.run_until(lambda: False, 200)
+            e.press.pop(w)
+            e.run_until(lambda: not e.is_pressed(kw), 800)
+            e.run_until(lambda: False, 200)
+        lag[level] = status(e)
+    scan_us = COLS * STEP / US
+    check(all(v['lag_on'] == 1 and v['lag_n'] == 2 for v in lag.values()),
+          f"delay measurement: two presses counted at each level ({[v['lag_n'] for v in lag.values()]})")
+    check(1.5 * scan_us <= lag[3]["lag_mean"] <= 2.6 * scan_us and 5.0 * scan_us <= lag[1]["lag_mean"] <= 6.6 * scan_us
+          and lag[3]['lag_min'] <= lag[3]['lag_mean'] <= lag[3]['lag_max'],
+          f"filtered value behind the reading at half travel: level 3 about 2 scans, level 1 about 6 "
+          f"({lag[3]['lag_mean']} and {lag[1]['lag_mean']} us; a scan is {scan_us:.0f} us here; classic {lag[0]['lag_mean']} us)")
+    check(command(e, [STATUS, 3])[40] == 0 and status(e)['lag_n'] == 0, 'measurement off, statistics cleared')
+
+    # per-reading smoothing on a three-ADC speed, saved and restored
+    command(e, [SETF, 3])
+    command(e, [SET, 6])
+    settle(e)
+    check(live(e) == (3, 5, 1) and all(tap(e, rc, d) for rc, d in SLOTS),
+          'level 3 on speed 6: a key in each result slot registers alone and releases')
+    sector6 = bytes(e.uc.mem_read(0x08040000, 0x20000))
+    watch = []
+    e2 = boot(sector6, watch=watch)
+    g = scan(e2)
+    check((g['speed'], g['level'], g['state']) == (6, 3, IN_EFFECT) and live(e2) == (3, 5, 1) and not watch,
+          f"after a restart: speed 6 and level 3 again, calibrated with that filter, no key pressed ({watch})")
+    check(all(tap(e2, rc, d) for rc, d in SLOTS) and travel_of(e2, kw) == 0, 'keys register and come back to rest')
+    scratch = (syms['_ebss'] + 0x100) & ~3              # COMMAND_RECALIBRATE answers after its 500 ms
+    e2.uc.mem_write(scratch, bytes([4]) + bytes(63))
+    e2.uc.mem_write(syms['out_buf'], bytes(64))
+    enqueue(e2, scratch)
+    seen = []
+    for _ in range(1500):
+        e2.step()
+        seen += pressed(e2)
+        if e2.uc.mem_read(syms['out_buf'], 1)[0] != 0:
+            break
+    r0 = e2.uc.mem_read(syms['out_buf'], 1)[0]
+    seen += run_watching(e2, 100)
+    check(r0 == 4 and not seen and max(travel_of(e2, k) for k in range(68)) == 0 and tap(e2, w),
+          f'recalibrating with level 3: every key at rest throughout, and W still registers ({r0}, {sorted(set(seen))})')
+    bad_flash = [hex(a) for a in e.flash_report() + e2.flash_report() if not (0x08040000 <= a < 0x08080000)]
+    check(not bad_flash, f'no flash changed outside sectors 6/7 {bad_flash}')
 
 
 def check_handoff(e: Cfw):

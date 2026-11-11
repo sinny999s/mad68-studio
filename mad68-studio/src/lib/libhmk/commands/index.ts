@@ -60,6 +60,7 @@ export enum HMK_Command {
   GET_FIRMWARE_INFO = 0x67,
   GET_SCAN = 0x68,
   SET_SCAN = 0x69,
+  SET_SCAN_FILTER = 0x6c,
 
   UNKNOWN = 255,
 }
