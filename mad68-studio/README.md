@@ -71,7 +71,7 @@ Plus MAD68-specific pages:
   - The Firmware page shows which custom firmware the keyboard runs (v7.2 and
     later report it; older builds show as "v7.1 or older") and which one the
     app installs. When the keyboard's is older, the page offers **Update to
-    v7.4**, and a dot on Firmware and a note in the sidebar point to it.
+    v7.5**, and a dot on Firmware and a note in the sidebar point to it.
   - The desktop app checks GitHub once per start for a newer MAD68 Studio
     release and links to it. It asks GitHub's public API for the latest
     release of this repository and sends nothing else; offline it stays quiet.
@@ -92,6 +92,10 @@ Plus MAD68-specific pages:
   - The page shows the scan rate the keyboard measures itself, live. Changing
     the speed applies at once, is saved on the keyboard, and makes the
     keyboard re-read every key's resting position.
+  - From custom firmware v7.5, Turbo, Extreme and Max read the bottom row
+    twice each time and drop a reading that does not agree with its twin.
+    That row's sensor line picks up a stray reading about once in 1,900 on
+    the MAD68 HE this was measured on; the other rows have none.
 - **Key Smoothing** (Settings, custom firmware v7.4): how the key readings are
   smoothed before the keyboard acts on them. **Classic** is the filter up to
   v7.3: it works over time, so it trails the key by about 1.5 ms at any scan
@@ -101,6 +105,20 @@ Plus MAD68-specific pages:
   faster the scan, the less they trail: at Max about 1.2, 0.6 and 0.3 ms. At
   the slower scan speeds they trail more than Classic. Each level shows its
   delay at the current scan speed.
+- **Rest Check** (Performance page): a hands-off measurement of how far each
+  key reads while nobody is touching the keyboard. It runs for 30 seconds,
+  2 minutes or 10 minutes, reads every key's travel as fast as the keyboard
+  answers, and then lists the keys that moved, worst first: the deepest
+  reading at rest, the key's actuation point in the current profile, the room
+  between the two, whether Rapid Trigger is on, and a verdict: fine, close
+  (under 0.3 mm of room) or would have pressed. Each key also gets the lowest
+  actuation point to try (the deepest reading plus 0.2 mm, never under
+  0.2 mm), which a button can set. A key that went past 2.0 mm was pressed by
+  hand and is left out. The check changes nothing on the keyboard and only
+  covers the time it ran, so a longer check finds rarer movements.
+- **Lights off while the PC sleeps** (custom firmware v7.5, no setting): the
+  LEDs go dark when the PC sleeps or shuts down with the port still powered,
+  and come back as they were when it wakes.
 - **Try Demo** on the start screen opens a MAD68 HE with its real layout and
   default keymap, with simulated typing, so every page can be tried without
   a keyboard.

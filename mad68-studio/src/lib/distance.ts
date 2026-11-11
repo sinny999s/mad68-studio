@@ -36,3 +36,12 @@ export function displayUnitDistance(v: number, decimal = 2) {
 export function displayDistance(v: number, decimal = 2) {
   return displayUnitDistance(distanceToUnit(v), decimal)
 }
+
+/**
+ * Exact travel in millimetres of a 0-255 distance. `displayDistance` snaps to
+ * the 0.05 mm steps of the sliders, which suits a setting; this is for
+ * readings, where 0.33 mm should not become 0.35.
+ */
+export function distanceToMM(v: number) {
+  return (v * SWITCH_DISTANCE_MM) / HMK_MAX_DISTANCE
+}

@@ -146,6 +146,10 @@ void layout_task(void) {
   for (uint32_t i = 0; i < NUM_KEYS; i++) {
     const key_state_t *k = &key_matrix[i];
     const bool last_key_press = bitmap_get(key_press_states, i);
+    // A key that is up and was up: nothing below does anything for it
+    // (controller bindings aside, which read its travel)
+    if (!gamepad_keys & !k->is_pressed & !last_key_press)
+      continue;
     // Whether the layout sees this key as pressed. A key the controller takes
     // over reads as released instead of being skipped, so a key that was
     // typing when controller output switched on is released, not left held.

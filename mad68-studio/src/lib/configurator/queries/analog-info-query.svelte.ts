@@ -22,12 +22,15 @@ const ANALOG_INFO_REFETCH_INTERVAL = 1000 / 30
 export class AnalogInfoQuery {
   analogInfo: ResourceReturn<HMK_AnalogInfo[]>
   enabled = $state(false)
+  // Set while something else reads the keys back to back (the rest check), so
+  // the two don't take turns on the keyboard
+  paused = $state(false)
 
   #keyboard = keyboardContext.get()
 
   constructor() {
     this.analogInfo = resource(
-      () => this.enabled,
+      () => this.enabled && !this.paused,
       async (enabled) => {
         if (!enabled) return this.analogInfo.current
         const ret = await this.#keyboard.analogInfo()

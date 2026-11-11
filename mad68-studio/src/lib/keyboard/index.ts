@@ -77,6 +77,12 @@ export type KeyboardAction = {
   factoryReset(): Promise<void>
   recalibrate(): Promise<void>
   analogInfo(): Promise<HMK_AnalogInfo[]>
+  /**
+   * Demo keyboard only: stop or resume its simulated typing, so that a
+   * measurement of resting keys has keys at rest. A real keyboard has no such
+   * thing.
+   */
+  setSimulatedTyping?(on: boolean): void
   getCalibration(): Promise<HMK_Calibration>
   setCalibration(params: SetCalibrationParams): Promise<void>
   getProfile(): Promise<number>

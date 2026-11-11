@@ -172,8 +172,12 @@ resting sensor values and checks GPIO/clock/ADC/USB setup against stock, the
 scan order, key presses in both magnet polarities, Fn+Ins, both fail-safe
 paths, a HardFault, and that no flash outside sectors 6/7 changes.
 
-Latest run (`out/MAD68HE_libhmk_v7.4.bin`, log `out/verify_v74.log`):
-**375/375 passed**. The 7.3.90 test build (`out/MAD68HE_libhmk_v7.4-test1.bin`,
+Latest run (`out/MAD68HE_libhmk_v7.5.bin`, log `out/verify_v75.log`):
+**449/449 passed**: the 375 checks of v7.4 (with the read mode of the three
+fast scan speeds now 7), 28 for the lighting while the PC sleeps, 31 for the
+paired read and its diagnostics, and 15 for the main loop. v7.4
+(`out/MAD68HE_libhmk_v7.4.bin`, log `out/verify_v74.log`) passed its
+375. The 7.3.90 test build (`out/MAD68HE_libhmk_v7.4-test1.bin`,
 log `out/verify_v74t1.log`) passed the 323 checks of its time, and v7.3
 (`out/MAD68HE_libhmk_v7.3.bin`, log `out/verify_v73.log`) its 249; v7.4 passes
 all of those unchanged apart from the release number, the new speed count and
@@ -862,3 +866,245 @@ mad68-cfw/
   out/         build output
   tools/       emulator, hardware-map probes, packer, verifier, generators
 ```
+
+## Lighting while the PC is asleep (v7.5)
+
+When the PC goes to sleep, or is shut down with the USB port still powered,
+the LEDs go dark. When it wakes they come back as they were. There is no
+setting for this.
+
+**How it is detected.** A sleeping PC stops sending anything on USB. After
+3 ms of silence the USB core reports the bus as suspended, and TinyUSB keeps
+that state (`tud_suspended()`). The LED driver (`rgb.c`) looks at it once per
+frame time (16 ms), between frames, so the main loop pays nothing for it. The
+LEDs go dark only if the host had configured the keyboard before the bus went
+quiet (`tud_mounted()`). At start-up and on a charger the bus is quiet too,
+but nobody has talked to the keyboard yet, so the lighting stays on as before.
+
+**Going dark** writes one all-off frame into the LED buffer. After that no
+frame is worked out or drawn; the DMA stream keeps sending the dark frame.
+Key scanning carries on, and a key press still asks the PC to wake up if the
+PC allows that (`hid.c`, unchanged).
+
+**Coming back** needs no stored state: the frames simply run again. Nothing
+in the settings is changed and nothing is written to flash, so the effect,
+colours, brightness and indicators are the same as before. Any of these
+brings the lighting back:
+
+- the PC resumes the bus (woken by its power button, the mouse or a timer);
+- the PC answers this keyboard's wake-up request after a key press;
+- the PC resets the bus without resuming it first, which is what it does when
+  it is switched on from shut-down. TinyUSB has no callback for that, which is
+  why the driver reads the bus state instead of using `tud_suspend_cb()` and
+  `tud_resume_cb()`.
+
+**Idle dimming** carries on where it was. Time asleep does not count as time
+without typing: lighting that was on comes back on, and lighting that had
+already faded out stays out until a key is pressed. The key that wakes the
+PC is such a key press, so it also brings the lighting back.
+
+**The fail-safe is unchanged**, and `board.c` is not touched. A suspended
+keyboard still counts as mounted, so a new build that is put to sleep before
+its 5 s confirmation is neither restarted at full speed nor sent back to the
+bootloader, and it is confirmed on time. A new build that never enumerates
+still goes back to the vendor bootloader after 9 s, whatever the bus looks
+like.
+
+Section 22 of `verify_cfw.py` checks all of this in the emulator against a
+model of the host: the bus reset, SET_ADDRESS, SET_CONFIGURATION and
+SET_FEATURE (remote wake-up) arrive through the USB core's registers and run
+through TinyUSB's own code, as do the suspend, resume and SOF interrupts. The
+emulator also now leaves interrupts pending while the firmware has them
+disabled, as the chip does; before, it could interrupt such a stretch, and
+one timing-test check passed or failed with the exact instruction count of
+the build.
+
+What the emulator cannot show, and the keyboard has to:
+
+- that this chip's USB core raises the suspend interrupt when the PC sleeps,
+  and the resume interrupt (WKUPINT) when the PC is woken by something other
+  than this keyboard. If that one never came, the LEDs would stay dark after
+  waking the PC with the mouse or the power button, until a key is pressed;
+- what the PC does to the bus around sleep, hibernate, shut-down and a
+  restart, and when Windows takes over from the BIOS. If the bus goes quiet
+  for a moment after the keyboard was configured, the LEDs go dark for that
+  moment.
+
+Checked by hand on a MAD68 HE (2026-11-11): the LEDs went dark when the PC was
+put to sleep and came back when it woke. Which of the ways above woke it was
+not noted, and hibernate, shut-down and a restart were not tried.
+
+Only the LEDs are switched off. The MCU, the sensors and the scan keep running
+as before, so the keyboard still draws far more than the 2.5 mA a suspended
+USB device is allowed, as it did before v7.5.
+
+## Stray readings on the bottom row (v7.5)
+
+### What was measured (v7.4, 2026-11-11)
+
+`tools/rest_log.py` ran for 37 minutes with nobody touching the keyboard:
+about 8.5 million scans, as back-to-back 256-scan probes, in eleven
+conditions (log: `out/rest_log_v74.jsonl`).
+
+- **Only the bottom row (sensor line PA7: Left Ctrl to Right) has stray
+  readings.** About 1 reading in 1,900 is more than 20 counts away from the
+  key's average, which is about 35 a second over the row at Max. The other
+  four rows had none in the whole run.
+- **Nothing the firmware does when reading changes the rate.** It was the
+  same with one ADC and with three, with the next column powered before or
+  after the results are stored, with sample times from 3 to 480 cycles, settle
+  times from 5 to 40 us, scan rates from 1,165 to 7,016 a second, and with the
+  LEDs on or off.
+- **They look like a short burst of interference on the line**, not like
+  noise: 20 to 60 counts in size with a sharp limit near 55 and most of them
+  close to that limit, 60% upward, and on all ten keys of the row alike. Two
+  readings in a row were stray about once every 53 s over the row, which is
+  what chance gives. (Counted per 256-scan probe they looked random in time;
+  v7.5's log, below, shows that they are not.)
+- **Nothing drifts.** Every key's average moved between -0.1 and +0.5 counts
+  in 37 minutes, so the rest values need no tracking while the keyboard is
+  on. (The warm-up after a cold start was not measured.)
+
+Smoothing levels 1-3 already drop a single stray reading (the median of
+three). The classic filter lets each one through at a sixteenth of its size.
+
+### The bottom row is read twice (timing mode bit 2)
+
+From v7.5 the three-ADC scan speeds (Turbo, Extreme, Max) use timing mode 7
+instead of 3. ADC2 converts PA7 twice in a row for each column, while ADC1
+converts PA3 and PA0 and ADC3 converts PA2 and PA1. Every ADC then does two
+conversions per column, so the scan is as fast as before.
+
+The two readings of a bottom-row key are 1.3 us apart at Max
+(`pair_reading()` in `analog.c`):
+
+- within 16 counts of each other (`SCAN_PAIR_AGREE`): the key's reading is
+  their average;
+- further apart: one of them is stray. The one closer to the key's last
+  reading is used, and the pair is counted (`SCAN_STATUS` reply bytes
+  49-52).
+
+So a stray reading is dropped before the smoothing and the keys see it, at
+every smoothing level. A disturbance that lasts through both readings and
+moves them the same way still gets through; such a pair is logged (below) if
+it is more than 24 counts (`SCAN_PAIR_JUMP`) from the key's last reading.
+
+Mode bit 2 needs bit 0 (three ADCs). Modes 5 and 7 can be probed and run live
+like the others (`tools/scan_probe.py`). The one-ADC speeds (Relaxed to
+Fastest) read as in v7.4.
+
+### Finding the source (test protocol 3)
+
+Four more `SCAN_STATUS` (0x6B) requests, layouts in `scan.h`. None of them
+saves anything.
+
+| Request | What it does |
+| --- | --- |
+| 4 | **Stray reading log**: the last 64 entries, three per reply. Each has the cycle counter when the column's results arrived, the cycle counter at the last USB start of frame, the SysTick counter, the key, both readings relative to the key's last one, and a kind: 1 = the pair disagreed, 2 = it agreed but jumped, 0 = an ordinary pair, logged once in 2,048 for comparison |
+| 5 | **Pin activity**: watches one port's input levels for 20 ms and reports how often each pin changed and how long it was high |
+| 6 | **Pin override**: analog mode, input, pull-up or pull-down for one of the unused pins next to the sensor lines (PA4, PA5, PA6, PC4, PC5, PB0; never an output), or back to what the stock firmware leaves |
+| 7 | **USB frame timestamps** on or off: the start-of-frame interrupt notes the cycle counter 8,000 times a second, for the log |
+
+`tools/stray_hunt.py` uses them (about seven minutes, hands off): how often
+the pairs disagree with the USB link quiet and busy, whether any stray
+reading still reaches a key, which pins change level by themselves, when the
+stray readings fall within the USB microframe and the millisecond tick
+compared with ordinary readings, and whether a pull or analog mode on a
+neighbouring pin changes the rate. The stock firmware leaves PA4, PA5 and PA6
+on an alternate function with no pull and nothing driving them, and PA6 is
+next to PA7.
+
+### Main loop
+
+At Max the main loop ran slower than the scan (about 6,000 passes a second
+against 7,000 scans), so a pass did not see every reading on its own. Two
+changes make a pass cheaper when little is happening:
+
+- `matrix_scan()` (per-reading smoothing levels only): a key with no new
+  reading is not fetched at all, and a key whose filtered value did not
+  change is left alone, because its travel and state would come out as they
+  went in. One pass per millisecond still goes through every key, which picks
+  up a changed profile, actuation point or Rapid Trigger setting.
+- `layout_task()`: a key that is up and was up is skipped (unless controller
+  bindings are reading its travel).
+
+In the emulator, with the scan at Max's rate and every key at rest, a pass
+went from 12,851 to 9,836 instructions.
+
+Section 23 of `verify_cfw.py` checks the paired read, the log and the pin
+diagnostics; sections 20 and 21 check the scan speeds with mode 7. Section 24
+holds a key part of the way down, moves its actuation point below and above
+that with and without Rapid Trigger, and checks that the key and the layout
+follow within 3 ms although its filtered value never changes, at Max with
+Fast smoothing, at Fastest with Smooth, and at Max with Classic.
+
+### Results on a MAD68 HE (v7.5, 2026-11-11)
+
+`tools/stray_hunt.py`, hands off, saved speed Max with Fast smoothing (logs:
+`out/stray_hunt_v75_a.json`, `out/stray_hunt_v75_b.json`).
+
+**The fast scan speeds with the bottom row read twice** (20 s each, live):
+
+| Speed | Scans/s | Readings/s | Main loop passes/s | Faults | v7.4 scans/s |
+| --- | --- | --- | --- | --- | --- |
+| Turbo | 4,710 | 353K | 10,991 | 0 | 4,741 |
+| Extreme | 5,997 | 450K | 8,171 | 0 | 6,060 |
+| Max | 6,744 | 506K | 6,747 | 0 | 6,852 |
+
+The paired read costs about 1% of the scan rate (more interrupt work per
+column). The main loop now makes at least one pass per scan at every speed; at
+Max it was about 6,000 passes a second on v7.4.
+
+**Stray readings reaching a key** (probes of 256 scans, counted per
+bottom-row key, 20 s per mode, run twice):
+
+| Read mode | Probes of a key with a stray reading |
+| --- | --- |
+| 3: each row read once | 619 of 4,630 and 578 of 4,630 (13%) |
+| 7: bottom row read twice | 0 of 4,600 and 0 of 4,600 |
+
+The two readings of a pair disagreed 71 to 76 times a second (1 pair in about
+900), the same with the USB link quiet or busy. In 60 s of the log, 4,337
+pairs disagreed: in every one of them only one reading was off (the other was
+within 9 counts of the key's last reading), and no pair agreed on a jump.
+
+**The source is the LED data signal**, on one stretch of its way through the
+LEDs:
+
+- The stray readings repeat with the LED data frame: 1,856 bit slots of
+  12.5 us = 23.2 ms. Folded against that frame, 4,335 of 4,337 fall inside one
+  block of 168 slots, which is exactly the data of 7 LEDs; the other 91% of
+  the frame has none. Inside the block they are spread evenly over the 7 LEDs
+  and over the 24 bits of each, and 1 pair in 84 has one.
+- Within a 12.5 us bit slot, the upward ones sit in a 0.4 us window and the
+  downward ones 0.35 to 0.8 us after it: the rising and the falling edge of
+  the data pulse (a 0 bit is high for 0.35 us, a 1 bit for 0.8 us).
+- Folded against the USB microframe (125 us) and the millisecond tick they
+  are spread as evenly as ordinary readings are.
+
+Each LED keeps the first 24 bits it sees and passes the rest on, so the
+stretch of data line between LED n and LED n+1 only carries pulses while the
+data of the LEDs after n goes by. A block of exactly the last 7 LEDs' data
+means the pulses that disturb PA7 are the ones on the line from LED 60 to
+LED 61: from Left Alt's LED to the Space bar's LED, the long hop under the
+space bar. (The LEDs are numbered in key order along the bottom row; the last
+seven are Space, Right Alt, Fn, Right Ctrl, Left, Down, Right.) The edges
+there are driven by Left Alt's LED, not by the MCU, so nothing about the
+MCU's own LED pin (PC9) changes them. Turning the lighting off does not stop
+them either: an all-off frame is still sent, as 0 bits.
+
+This also explains the 37-minute log: the same rate at every scan timing
+(the sampling instant lands on an edge by chance), and the same with the
+lights off.
+
+**Pins** (not the source): apart from the fifteen column lines and the LED
+data pin, no pin of ports A to E changes level. PA4 rests high, PA5 and PA6
+low. With a pull-down, pull-up or analog mode on PA6, PA5, PA4, and analog
+mode on PC4, PC5, PB0, the rate stayed between 70 and 76 a second (72 as
+stock leaves them, +-2).
+
+Not part of this test: the one-ADC scan speeds (Relaxed to Fastest), which
+still read the bottom row once. There, smoothing levels 1 to 3 drop a stray
+reading (the median of three) and Classic lets it through at a sixteenth of
+its size, as in v7.4. The lighting while the PC is asleep was checked by hand
+(see that section).

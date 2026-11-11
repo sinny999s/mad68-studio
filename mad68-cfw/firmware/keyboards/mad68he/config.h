@@ -38,6 +38,13 @@
 #define ADC_PARALLEL_ADC2_ROWS {1, 4}
 #define ADC_PARALLEL_ADC3_ROWS {2}
 
+// Paired read (v7.5): one row is converted twice in a row by ADC2, so that a
+// stray reading on it shows as the two disagreeing; ADC1 and ADC3 share the
+// other rows. PA7 (row 4) is the row with stray readings on this board.
+#define ADC_PAIRED_ADC1_ROWS {0, 3}
+#define ADC_PAIRED_ADC3_ROWS {1, 2}
+#define ADC_PAIRED_ROW 4
+
 // Value reported for a key at rest; travel is added on top in the direction
 // learned for that key, leaving 3071 counts of headroom.
 #define ADC_REST_REFERENCE 1024

@@ -126,14 +126,18 @@ key_state_t key_matrix[NUM_KEYS];
 __attribute__((always_inline)) static inline bool
 matrix_filter(uint32_t i, uint32_t level, uint32_t seed, uint16_t *raw,
               uint16_t *filtered) {
-  const uint16_t x = matrix_analog_read((uint8_t)i);
-  *raw = x;
 #if defined(MATRIX_SCAN_FILTER)
   if (level != SCAN_FILTER_CLASSIC) {
     key_filter_t *f = &key_filter[i];
+    const volatile uint8_t *counter = &analog_col_seq[analog_key_col[i]];
+    // Nothing read since the last pass: the reading need not be fetched
+    if (seed == FILTER_SEED_NONE && *counter == f->seq)
+      return false;
+    const uint16_t x = matrix_analog_read((uint8_t)i);
+    *raw = x;
     // The counter is read after the reading: if a new reading lands in
     // between, it is skipped next time rather than taken twice
-    const uint8_t seq = analog_col_seq[analog_key_col[i]];
+    const uint8_t seq = *counter;
     if (seed != FILTER_SEED_NONE) {
       f->seq = seq;
       f->prev[0] = x;
@@ -180,6 +184,8 @@ matrix_filter(uint32_t i, uint32_t level, uint32_t seed, uint16_t *raw,
   (void)level;
   (void)seed;
 #endif
+  const uint16_t x = matrix_analog_read((uint8_t)i);
+  *raw = x;
   *filtered = (uint16_t)EMA(x, key_matrix[i].adc_filtered);
   return true;
 }
@@ -302,17 +308,38 @@ void matrix_recalibrate(bool reset_bottom_out_threshold) {
 void matrix_scan(void) {
   uint32_t seed;
   const uint32_t level = filter_pass_begin(&seed);
+#if defined(MATRIX_SCAN_FILTER)
+  // With a per-reading filter, a key whose filtered value is the same as last
+  // pass comes out of everything below exactly as it went in (same travel,
+  // same state), as long as its settings are the same. So such a key is left
+  // alone, except in one pass per millisecond, which goes through every key
+  // and so picks up a change of profile, actuation or Rapid Trigger setting.
+  static uint32_t last_refresh = 0;
+  const uint32_t tick = timer_read();
+  const bool refresh = (level == SCAN_FILTER_CLASSIC) |
+                       (seed != FILTER_SEED_NONE) | (tick != last_refresh);
+  last_refresh = tick;
+#endif
   for (uint32_t i = 0; i < NUM_KEYS; i++) {
     uint16_t raw, new_adc_filtered;
+#if defined(MATRIX_SCAN_FILTER)
+    if (!matrix_filter(i, level, seed, &raw, &new_adc_filtered)) {
+      // No reading since the last pass
+      if (!refresh)
+        continue;
+      new_adc_filtered = key_matrix[i].adc_filtered;
+    } else if (lag_on) {
+      lag_update(i, raw, new_adc_filtered);
+    } else if (!refresh && new_adc_filtered == key_matrix[i].adc_filtered) {
+      continue;
+    }
+#else
     if (!matrix_filter(i, level, seed, &raw, &new_adc_filtered))
       continue;
+#endif
     const actuation_t *actuation = &CURRENT_PROFILE.actuation_map[i];
 
     key_matrix[i].adc_filtered = new_adc_filtered;
-#if defined(MATRIX_SCAN_FILTER)
-    if (lag_on)
-      lag_update(i, raw, new_adc_filtered);
-#endif
 
     if (new_adc_filtered >=
         key_matrix[i].adc_bottom_out_value + MATRIX_CALIBRATION_EPSILON)

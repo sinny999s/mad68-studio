@@ -51,6 +51,21 @@ interrupts, and checks:
      smoothing levels 1-3 run once per reading (median of three, then a
      step of 1/8, 1/4 or 1/2, with a rise band), drop a stray reading,
      change without moving anything, are saved; delay measured on presses
+ 22. PC sleep (v7.5): the LEDs go dark (one all-off frame, then nothing drawn)
+     while the USB bus is suspended after a working connection, and come back
+     as they were on resume (host resume, remote wake-up by a key, or a bus
+     reset); an idle bus at start-up darkens nothing; settings and flash are
+     untouched; idle dimming carries on where it was; the fail-safe neither
+     fires on a suspended keyboard nor is held off on a bus that never
+     enumerates
+ 23. v7.5: the paired read (ADC2 converts the bottom row twice per column):
+     every key from its own sensor, a stray reading on one of the two
+     conversions dropped before the keys see it, counted and logged with a
+     timestamp; pin activity and pin override diagnostics
+ 24. v7.5 main loop: a key whose filtered value did not change is left alone,
+     and a changed actuation point still reaches a key held still within a
+     few milliseconds, with and without Rapid Trigger, at every kind of
+     smoothing
 
 Usage: python verify_cfw.py <firmware.elf> <firmware raw .bin> <nm.exe> <dir with backup/ and tools/>
 """
@@ -68,7 +83,7 @@ from pathlib import Path
 from unicorn import Uc, UcError, UC_ARCH_ARM, UC_MODE_THUMB, UC_MODE_MCLASS, UC_HOOK_MEM_WRITE
 from unicorn.arm_const import (UC_ARM_REG_PC, UC_ARM_REG_SP, UC_ARM_REG_LR, UC_ARM_REG_R0,
                                UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3, UC_ARM_REG_R12,
-                               UC_ARM_REG_XPSR, UC_ARM_REG_APSR, UC_ARM_REG_FPSCR,
+                               UC_ARM_REG_XPSR, UC_ARM_REG_APSR, UC_ARM_REG_FPSCR, UC_ARM_REG_PRIMASK,
                                UC_ARM_REG_D0, UC_ARM_REG_D1, UC_ARM_REG_D2, UC_ARM_REG_D3,
                                UC_ARM_REG_D4, UC_ARM_REG_D5, UC_ARM_REG_D6, UC_ARM_REG_D7)
 
@@ -118,6 +133,8 @@ class CfwPeriph(Periph):
     def __init__(self):
         super().__init__()
         self.started: set[int] = set()         # ADCs with a sequence started
+        self.idr: dict = {}                    # test hook: GPIO port base -> f(read number) -> input levels
+        self.idr_reads = 0
         self.adc_absent = False                # test hook: no ADC2/ADC3 on this chip
         self.erases: list[int] = []
         self.gintsts = 0
@@ -125,6 +142,9 @@ class CfwPeriph(Periph):
     def get(self, a):
         if self.adc_absent and ADC2 <= a < ADC3 + 0x100:
             return 0
+        if self.idr and a & 0x3FF == 0x10 and a & ~0x3FF in self.idr:
+            self.idr_reads += 1
+            return self.idr[a & ~0x3FF](self.idr_reads)
         if a == 0x40023800:
             v = self.regs.get(a, 0x83)
             v = (v & ~((1 << 1) | (1 << 17) | (1 << 25) | (1 << 27)))
@@ -199,6 +219,8 @@ class Cfw:
         self.dead_adcs: set[int] = set()       # test hook: these ADCs never deliver a result
         # test hook: (parallel read, settle ticks, sample code, row, col) -> counts added
         self.timing_effect = None
+        # test hook: (ADC number, rank in its sequence, row, col) -> counts added to that conversion
+        self.rank_effect = None
         self.col_log: list[int | None] = []
         self.conv_log = collections.deque(maxlen=4096)   # (column, {ADC: [channels]})
         self.ticks = 0
@@ -340,6 +362,8 @@ class Cfw:
                     v = self.rest[row][col] + self.press.get((row, col), 0)
                     if self.timing_effect:
                         v += self.timing_effect(len(started) > 1, ticks, (smpr2 >> (3 * ch)) & 7, row, col)
+                    if self.rank_effect:
+                        v += self.rank_effect(n, rank, row, col)
                     v = max(0, min(4095, v))
                 if ndtr:
                     buf[rank % ndtr] = v          # the stream wraps after NDTR results
@@ -362,6 +386,14 @@ class Cfw:
         self.run_thread(instructions)
         if self.in_bootloader:
             return
+        # Interrupts stay pending while the firmware has them disabled
+        # (PRIMASK): let it finish that stretch first, as the chip would,
+        # instead of interrupting code that cannot be interrupted
+        while self.uc.reg_read(UC_ARM_REG_PRIMASK) & 1 and instructions < 30000:
+            self.run_thread(50)
+            instructions += 50
+            if self.in_bootloader:
+                return
         regs = self.p.regs
         # DWT cycle counter: one cycle per thread instruction of each step
         regs[0xE0001004] = (regs.get(0xE0001004, 0) + instructions) & 0xFFFFFFFF
@@ -832,6 +864,9 @@ def main():
     scan_speed_v73(image, syms, rest, build_id, keys, kidx)
     timing_test_v74(image, syms, rest, build_id, keys, kidx)
     scan_v74(image, syms, rest, build_id, keys, kidx, Path(sys.argv[4]))
+    sleep_lights_v75(image, syms, rest, build_id, Path(sys.argv[4]), led_map, keys, kidx)
+    paired_v75(image, syms, rest, build_id, keys, kidx)
+    main_loop_v75(image, syms, rest, build_id, keys, kidx)
 
     print('[9] flash integrity across all runs: checked per scenario above')
     failed = [w for ok, w in results if not ok]
@@ -1824,9 +1859,9 @@ def stick_v72(gamepad, syms, kidx):
 
 
 def firmware_info_v72(image, syms, rest, build_id):
-    """[18] GET_FIRMWARE_INFO and the release marker (v7.2; release 7.4.0 now)."""
+    """[18] GET_FIRMWARE_INFO and the release marker (v7.2; release 7.5.0 now)."""
     print('[18] firmware info v7.2 (release, build ID, marker in the image)')
-    GET_FIRMWARE_INFO, MARKER = 0x67, b'MAD68CFW v7.4.0'
+    GET_FIRMWARE_INFO, MARKER = 0x67, b'MAD68CFW v7.5.0'
     e = Cfw(image, syms, rest, journal=struct.pack('<I', build_id))
     e.stub_usb_host()
     e.run_until(lambda: e.r8('baseline_ready') == 1 and e.p.regs.get(OTG + 0x18, 0) != 0, 3000)
@@ -1842,8 +1877,8 @@ def firmware_info_v72(image, syms, rest, build_id):
 
     r = command([GET_FIRMWARE_INFO])
     bid = struct.unpack_from('<I', r, 4)[0]
-    check(r[0] == GET_FIRMWARE_INFO and tuple(r[1:4]) == (7, 4, 0),
-          f'GET_FIRMWARE_INFO reports release 7.4.0 ({tuple(r[1:4])}, reply {r[0]:#x})')
+    check(r[0] == GET_FIRMWARE_INFO and tuple(r[1:4]) == (7, 5, 0),
+          f'GET_FIRMWARE_INFO reports release 7.5.0 ({tuple(r[1:4])}, reply {r[0]:#x})')
     check(bid == build_id, f'and the ID of this build ({bid:#010x} vs {build_id:#010x})')
     check(r[8:32] == MARKER + bytes(24 - len(MARKER)),
           f'and the marker, zero-padded over whatever was in the buffer ({r[8:32]!r})')
@@ -2148,7 +2183,7 @@ def timing_test_v74(image, syms, rest, build_id, keys, kidx):
     # --- a keyboard that never runs a probe reads its keys as v7.3 does ---
     e = boot(struct.pack('<I', build_id))
     st = status(e)
-    check(st['reply'] == STATUS and st['proto'] == 2 and (st['mode'], st['ticks'], st['sample']) == (0, 28 * US, 2)
+    check(st['reply'] == STATUS and st['proto'] == 3 and (st['mode'], st['ticks'], st['sample']) == (0, 28 * US, 2)
           and st['flags'] == 0 and st['state'] == NONE and st['tpu'] == US and st['speed'] == 1 and not any(st['tail']),
           f"SCAN_STATUS after start-up: one ADC, 28 us, 28-cycle samples, nothing tuned, no probe ({st['mode']}, "
           f"{st['ticks']}, {st['sample']}, flags {st['flags']})")
@@ -2162,7 +2197,7 @@ def timing_test_v74(image, syms, rest, build_id, keys, kidx):
     bad = {'mode 4': [PROBE, 4, 0x40, 5, 2, 4, 0], 'sample code 8': [PROBE, 0, 0x40, 5, 8, 4, 0],
            'settle of 7 ticks': [PROBE, 0, 7, 0, 2, 4, 0], '8 scans': [PROBE, 0, 0x40, 5, 2, 3, 0],
            '8,192 scans': [PROBE, 0, 0x40, 5, 2, 13, 0], 'go-live value 2': [PROBE, 0, 0x40, 5, 2, 4, 2],
-           'status request 4': [STATUS, 4], 'results from key 68': [STATUS, 1, 68]}
+           'status request 8': [STATUS, 8], 'results from key 68': [STATUS, 1, 68]}
     refused = {why: command(e, c)[0] for why, c in bad.items()}
     check(all(v == 0xFF for v in refused.values()) and R(e, TIM10 + 0x2C) == before and status(e)['state'] == NONE,
           f'out-of-range requests are refused and change nothing ({[w for w, v in refused.items() if v != 0xFF]})')
@@ -2511,7 +2546,7 @@ def scan_v74(image, syms, rest, build_id, keys, kidx, base):
     IN_EFFECT, SWITCHING, REFUSED = 0, 1, 2
     F_TUNED, F_FELL_BACK = 1, 4
     US, STEP, N = 168, 3000, 7
-    SPEEDS = {4: (3, 8, 2), 5: (3, 5, 2), 6: (3, 5, 1)}     # speed: mode, settle us, sample code
+    SPEEDS = {4: (7, 8, 2), 5: (7, 5, 2), 6: (7, 5, 1)}     # speed: mode, settle us, sample code
 
     def boot(journal, rest_values=rest, absent=False, effect=None, watch=None):
         e = Cfw(image, syms, rest_values, journal=journal)
@@ -2595,7 +2630,7 @@ def scan_v74(image, syms, rest, build_id, keys, kidx, base):
     def parallel_setup(e, sample):
         smp = [R(e, b + 0x10) for b in (ADC1, ADC2, ADC3)]
         seqs = (seq(e, ADC1), seq(e, ADC2), seq(e, ADC3))
-        return (seqs == ([3, 0], [2, 7], [1])
+        return (seqs == ([3, 0], [7, 7], [2, 1])
                 and all((smp[i] >> (3 * ch)) & 7 == sample for i, chs in enumerate(seqs) for ch in chs)
                 and all(R(e, b + 8) & 0x301 == 0x301 for b in (ADC1, ADC2, ADC3)))
 
@@ -2622,7 +2657,7 @@ def scan_v74(image, syms, rest, build_id, keys, kidx, base):
     e = boot(confirmed)
     g = scan(e)
     check(g['raw'][1] == 2 and g['speed'] == 1 and g['count'] == N and g['settle'] == [40, 28, 18, 8, 8, 5, 5]
-          and g['timing'] == [0x20] * 4 + [0x23, 0x23, 0x13] and g['state'] == IN_EFFECT
+          and g['timing'] == [0x20] * 4 + [0x27, 0x27, 0x17] and g['state'] == IN_EFFECT
           and (g['level'], g['levels']) == (0, 4) and g['loops'] > 0 and not any(g['tail']),
           f"GET_SCAN v2: 7 speeds with their settle time, mode and sample code, the speed in effect, smoothing 0 of 4, "
           f"main loop rate ({g['raw'][:26].hex(' ')})")
@@ -2641,7 +2676,7 @@ def scan_v74(image, syms, rest, build_id, keys, kidx, base):
         g, st = scan(e), status(e)
         check(g['state'] == IN_EFFECT and g['busy'] == 0 and live(e) == (mode, us, sample) and parallel_setup(e, sample)
               and R(e, TIM10 + 0x2C) == arr(us) and not st['flags'] & (F_TUNED | F_FELL_BACK),
-              f'speed {speed} in effect: three ADCs, next column first, {us} us, sample code {sample} '
+              f'speed {speed} in effect: three ADCs, bottom row twice, next column first, {us} us, sample code {sample} '
               f'({live(e)}, ARR {R(e, TIM10 + 0x2C)})')
         check(not seen and travel[0] <= 1 and baseline_err(e) <= 2,
               f"no key's travel moved while switching (deepest {travel[0]}), rest values right")
@@ -2653,7 +2688,7 @@ def scan_v74(image, syms, rest, build_id, keys, kidx, base):
     t = 40 * US
     command(e, [PROBE, 0, t & 0xFF, t >> 8, 2, 4, 0])
     e.run_until(lambda: e.r8('probe_state') != 1, 600)
-    check(status(e)['pstate'] == 2 and live(e) == (3, 5, 1) and parallel_setup(e, 1) and scan(e)['state'] == IN_EFFECT,
+    check(status(e)['pstate'] == 2 and live(e) == (7, 5, 1) and parallel_setup(e, 1) and scan(e)['state'] == IN_EFFECT,
           'a measuring probe on speed 6 returns to speed 6')
 
     # back to a one-ADC speed
@@ -2670,7 +2705,7 @@ def scan_v74(image, syms, rest, build_id, keys, kidx, base):
     order = [(a, v) for _, _, k, a, _, v in e2.p.log if k == 'W' and (a == TIM10 + 0x2C or ADC2 <= a < ADC3 + 0x100)]
     first_extra = next((i for i, (a, _) in enumerate(order) if a != TIM10 + 0x2C), None)
     arrs_before = [v for a, v in order[:first_extra] if a == TIM10 + 0x2C]
-    check(live(e2) == (3, 5, 1) and scan(e2)['state'] == IN_EFFECT and scan(e2)['speed'] == 6 and parallel_setup(e2, 1),
+    check(live(e2) == (7, 5, 1) and scan(e2)['state'] == IN_EFFECT and scan(e2)['speed'] == 6 and parallel_setup(e2, 1),
           f'after a restart with speed 6 saved: speed 6 in effect ({live(e2)})')
     check(arrs_before and set(arrs_before) == {arr(8)} and not watch and baseline_err(e2) <= 2,
           f'it starts on one ADC at 8 us and only then asks for three; no key pressed on the way ({watch})')
@@ -2702,7 +2737,7 @@ def scan_v74(image, syms, rest, build_id, keys, kidx, base):
     e.timing_effect = None
     command(e, [SET, 4])
     settle(e)
-    check(scan(e)['state'] == IN_EFFECT and live(e) == (3, 8, 2), 'asked again once the readings agree: in effect')
+    check(scan(e)['state'] == IN_EFFECT and live(e) == (7, 8, 2), 'asked again once the readings agree: in effect')
 
     watch = []
     e2 = boot(saved(5), effect=bad, watch=watch)
@@ -2723,7 +2758,7 @@ def scan_v74(image, syms, rest, build_id, keys, kidx, base):
 
     # an ADC dies, or the scan stops, on a three-ADC speed
     e = boot(saved(4))
-    check(live(e) == (3, 8, 2), 'speed 4 in effect after start-up')
+    check(live(e) == (7, 8, 2), 'speed 4 in effect after start-up')
     e.dead_adcs = {3}
     travel[0] = 0
     seen = run_watching(e, 90)
@@ -2738,7 +2773,7 @@ def scan_v74(image, syms, rest, build_id, keys, kidx, base):
     e.dead_adcs = set()
     command(e, [SET, 4])
     settle(e)
-    check(live(e) == (3, 8, 2) and scan(e)['state'] == IN_EFFECT, 'SET_SCAN 4 again brings it back')
+    check(live(e) == (7, 8, 2) and scan(e)['state'] == IN_EFFECT, 'SET_SCAN 4 again brings it back')
     e.drop_adc = True
     seen = run_watching(e, 160)
     e.drop_adc = False
@@ -2885,13 +2920,13 @@ def scan_v74(image, syms, rest, build_id, keys, kidx, base):
     command(e, [SETF, 3])
     command(e, [SET, 6])
     settle(e)
-    check(live(e) == (3, 5, 1) and all(tap(e, rc, d) for rc, d in SLOTS),
+    check(live(e) == (7, 5, 1) and all(tap(e, rc, d) for rc, d in SLOTS),
           'level 3 on speed 6: a key in each result slot registers alone and releases')
     sector6 = bytes(e.uc.mem_read(0x08040000, 0x20000))
     watch = []
     e2 = boot(sector6, watch=watch)
     g = scan(e2)
-    check((g['speed'], g['level'], g['state']) == (6, 3, IN_EFFECT) and live(e2) == (3, 5, 1) and not watch,
+    check((g['speed'], g['level'], g['state']) == (6, 3, IN_EFFECT) and live(e2) == (7, 5, 1) and not watch,
           f"after a restart: speed 6 and level 3 again, calibrated with that filter, no key pressed ({watch})")
     check(all(tap(e2, rc, d) for rc, d in SLOTS) and travel_of(e2, kw) == 0, 'keys register and come back to rest')
     scratch = (syms['_ebss'] + 0x100) & ~3              # COMMAND_RECALIBRATE answers after its 500 ms
@@ -2910,6 +2945,868 @@ def scan_v74(image, syms, rest, build_id, keys, kidx, base):
           f'recalibrating with level 3: every key at rest throughout, and W still registers ({r0}, {sorted(set(seen))})')
     bad_flash = [hex(a) for a in e.flash_report() + e2.flash_report() if not (0x08040000 <= a < 0x08080000)]
     check(not bad_flash, f'no flash changed outside sectors 6/7 {bad_flash}')
+
+
+def paired_v75(image, syms, rest, build_id, keys, kidx):
+    """[23] v7.5: the paired read (one row converted twice per column, a stray
+    reading dropped before the keys ever see it), the stray reading log, and
+    the pin diagnostics."""
+    print('[23] v7.5 (bottom row read twice, stray reading log, pin diagnostics)')
+    PROBE, STATUS, GET, SET = 0x6A, 0x6B, 0x68, 0x69
+    RUNNING, DONE = 1, 2
+    US, STEP = 168, 3000
+    PAIRED = 7                                        # three ADCs, next column first, paired row
+    ROW = 4                                           # the paired row (PA7, channel 7)
+
+    def boot(journal, rest_values=rest):
+        e = Cfw(image, syms, rest_values, journal=journal)
+        e.stub_usb_host()
+        e.run_until(lambda: e.r8('baseline_ready') == 1 and e.p.regs.get(OTG + 0x18, 0) != 0, 3000)
+        e.run_until(lambda: False, 700)
+        return e
+
+    def command(e, payload, limit=400):
+        scratch = (syms['_ebss'] + 0x100) & ~3
+        e.uc.mem_write(scratch, bytes(payload) + bytes(64 - len(payload)))
+        e.uc.mem_write(syms['out_buf'], bytes([0]) + bytes([0xAA]) * 63)
+        enqueue(e, scratch)
+        e.run_until(lambda: e.uc.mem_read(syms['out_buf'], 1)[0] != 0, limit)
+        return bytes(e.uc.mem_read(syms['out_buf'], 64))
+
+    def status(e):
+        r = command(e, [STATUS, 0])
+        w = lambda i: r[i] | r[i + 1] << 8            # noqa: E731
+        return dict(proto=r[1], mode=r[2], us=w(3) / US, sample=r[5], pstate=r[7], err=r[8],
+                    cycles=int.from_bytes(r[14:18], 'little'), shift=w(18), pfaults=w(21), faults=w(23),
+                    pairs=int.from_bytes(r[49:53], 'little'))
+
+    def probe(e, mode, us, sample=2, log2=4, live=0):
+        t = round(us * US)
+        return command(e, [PROBE, mode, t & 0xFF, t >> 8, sample, log2, live])
+
+    def finish(e, limit=1500):
+        e.run_until(lambda: e.r8('probe_state') != RUNNING, limit)
+        return status(e)
+
+    def results(e):
+        out = []
+        for first in range(0, 68, 10):
+            r = command(e, [STATUS, 1, first])
+            out += [struct.unpack_from('<HHH', r, 4 + 6 * i) for i in range(r[3])]
+        return out
+
+    sofs = {}                                         # entry number -> cycle counter at the last USB frame start
+
+    def strays(e, first=0):
+        """The stray reading log from entry `first`: total, [(number, cycles, key, kind, a, b)]."""
+        out, total = [], 0
+        for _ in range(80):
+            r = command(e, [STATUS, 4, first & 0xFF, (first >> 8) & 0xFF])
+            total = r[1] | r[2] << 8
+            n = r[4]
+            if not n:
+                break
+            base_no = (first & ~0xFF) | r[3]
+            if base_no < first:
+                base_no += 0x100
+            for i in range(n):
+                cyc, sof, tick_lo, tick_hi, _late, _zero, key, kind, a, b = struct.unpack_from('<IIHBBBBBhh', r, 5 + 19 * i)
+                sofs[base_no + i] = sof
+                if kind:                              # ordinary readings logged for comparison are left out
+                    out.append((base_no + i, cyc, key, kind, a, b))
+            first = base_no + n
+        return total, out
+
+    def raw(e):
+        return [e.r16(syms['adc_raw'] + 2 * i) for i in range(68)]
+
+    def pressed(e):
+        return [i for i in range(68) if e.is_pressed(i)]
+
+    def seq(e, base_):
+        n = ((R(e, base_ + 0x2C) >> 20) & 0xF) + 1
+        return [(R(e, base_ + 0x34) >> (5 * i)) & 0x1F for i in range(n)]
+
+    def settle(e, limit=900):
+        e.run_until(lambda: e.r8('speed_state') != 1 and e.r8('probe_state') != RUNNING
+                    and e.r8('baseline_pass') == 0xFF, limit)
+
+    R = lambda e, a: e.p.regs.get(a, 0)              # noqa: E731
+    confirmed = struct.pack('<I', build_id)
+    bottom = [rc for rc in keys if rc[0] == ROW]
+
+    # --- every key from its own sensor ---
+    uniq = [[4095 if rest[r][c] == 4095 else 1500 + 300 * r + 11 * c for c in range(COLS)] for r in range(ROWS)]
+    e = boot(confirmed, uniq)
+    refused = [command(e, [PROBE, m, 0x40, 5, 2, 4, 0])[0] for m in (4, 6, 8)]
+    check(refused == [0xFF] * 3, f'the paired read needs three ADCs: modes 4, 6 (and 8) are refused ({refused})')
+    for mode, name in ((PAIRED, 'next column first'), (5, 'results stored first')):
+        r = probe(e, mode, 8)
+        buf = syms['adc_buffer']
+        seqs = (seq(e, ADC1), seq(e, ADC2), seq(e, ADC3))
+        d = {n: (R(e, st_ + 4), R(e, st_ + 0xC)) for n, (_, st_, _, _) in ADC_DMA.items()}
+        st = finish(e)
+        res = results(e)
+        wrong = [rc for rc in keys if res[kidx[rc]] != (uniq[rc[0]][rc[1]] * 16,) + (uniq[rc[0]][rc[1]],) * 2]
+        check(r[0] == PROBE and seqs == ([3, 0], [7, 7], [2, 1])
+              and d == {1: (2, buf), 2: (2, buf + 8), 3: (2, buf + 4)},
+              f'mode {mode}: ADC1 PA3,PA0  ADC2 PA7 twice  ADC3 PA2,PA1, each into its own slots ({seqs})')
+        check(st['pstate'] == DONE and st['pfaults'] == 0 and st['cycles'] == 16 * COLS * STEP and not wrong
+              and st['shift'] <= 2,
+              f'mode {mode} ({name}): every key gets the reading of its own sensor (wrong: {wrong[:5]})')
+
+    # --- a stray reading never reaches the keys ---
+    e = boot(confirmed)
+    probe(e, PAIRED, 8, live=1)
+    finish(e)
+    settle(e)
+    check(status(e)['mode'] == PAIRED and not pressed(e), 'paired read live')
+    hit = {}                                          # (rank, col) -> counts added to that one conversion
+
+    def rank_effect(n, rank, row, col):
+        if n == 2 and row == ROW:
+            return hit.pop((rank, col), 0)
+        return 0
+    e.rank_effect = rank_effect
+    space, lctrl = (4, 6), (4, 0)
+
+    def one_visit(e, plan, steps=20):
+        """Add counts to chosen conversions of one visit to a column, and
+        return how far any key's reading and travel went meanwhile."""
+        col = next(iter(plan))[1]
+        e.run_until(lambda: e.col_log and e.col_log[-1] == (col - 1) % COLS, 40)
+        before = raw(e)
+        hit.update(plan)
+        worst = travel = 0
+        seen = set()
+        for _ in range(steps):
+            e.step()
+            now_ = raw(e)
+            worst = max(worst, max(abs(a - b) for a, b in zip(now_, before)))
+            travel = max(travel, max(e.r8('key_matrix', k * 10 + 6) for k in range(68)))
+            seen.update(pressed(e))
+        return worst, travel, sorted(seen)
+
+    total0, _ = strays(e)
+    pairs0 = status(e)['pairs']
+    a = one_visit(e, {(0, 6): 50})
+    b = one_visit(e, {(1, 0): -45})
+    st = status(e)
+    total, log = strays(e, total0)
+    check(a[:2] == (0, 0) and b[:2] == (0, 0) and not a[2] and not b[2],
+          f'one of the two readings 50 (or 45) counts off: the key\'s reading does not move at all ({a}, {b})')
+    check(st['pairs'] == pairs0 + 2 and total == total0 + 2
+          and [(k, kind, x, y) for _, _, k, kind, x, y in log] == [(kidx[space], 1, 50, 0), (kidx[lctrl], 1, 0, -45)],
+          f'both are counted and logged with the key and the two readings ({[t[2:] for t in log]})')
+    check(len(log) == 2 and log[1][1] > log[0][1], 'with the cycle counter of each, in order')
+    c = one_visit(e, {(0, 6): 50, (1, 6): 50})
+    total2, log2 = strays(e, total)
+    check(c[0] == 50 and status(e)['pairs'] == pairs0 + 2 and log2 and log2[0][2:] == (kidx[space], 2, 50, 50),
+          f'both readings off the same way (a disturbance longer than the gap): it gets through, and is logged as '
+          f'a jump ({c[0]} counts; {log2[0][2:] if log2 else None})')
+    e.run_until(lambda: False, 60)
+
+    # many strays, smoothing as it was before v7.4
+    import random
+    rng = random.Random(5)
+    injected = [0]
+
+    plan = {}
+
+    def noisy(n, rank, row, col):
+        # At most one of a visit's two readings is stray, as on the keyboard,
+        # where they are rare; only columns with a bottom-row key count
+        if n != 2 or row != ROW:
+            return 0
+        if rank == 0:
+            plan.clear()
+            if rng.random() < 1 / 20:
+                plan[rng.randint(0, 1)] = rng.choice((-1, 1)) * rng.randint(25, 60)
+                injected[0] += (ROW, col) in kidx
+        return plan.get(rank, 0)
+    e.rank_effect = noisy
+    pairs0 = status(e)['pairs']
+    before = raw(e)
+    worst = travel = 0
+    for _ in range(1500):                              # 100 scans, about 50 stray readings
+        e.step()
+        now_ = raw(e)
+        worst = max(worst, max(abs(x - y) for x, y in zip(now_, before)))
+        travel = max(travel, max(e.r8('key_matrix', k * 10 + 6) for k in range(68)))
+    e.rank_effect = None
+    got = status(e)['pairs'] - pairs0
+    check(injected[0] >= 15 and worst == 0 and travel == 0 and not pressed(e),
+          f'{injected[0]} stray readings in 100 scans, classic smoothing: no reading and no travel moves '
+          f'(largest move {worst})')
+    check(abs(got - injected[0]) <= 2, f'and they are all counted ({got} of {injected[0]})')
+
+    # a real press still gets through at once, alone
+    k = kidx[space]
+    e.press[space] = 900
+    e.run_until(lambda: e.is_pressed(k), 400)
+    alone = pressed(e) == [k]
+    e.press.pop(space)
+    e.run_until(lambda: not e.is_pressed(k), 400)
+    check(alone and not pressed(e) and status(e)['pairs'] == pairs0 + got,
+          'a real press of Space registers alone and releases, and is not counted as a disagreement')
+
+    # the log keeps the last 64 and hands them out six at a time
+    e.rank_effect = lambda n, rank, row, col: 30 if n == 2 and row == ROW and rank == 0 else 0
+    e.run_until(lambda: False, 150)                   # 10 scans x 10 bottom-row keys = 100 entries
+    e.rank_effect = None
+    total, log = strays(e, 0)
+    numbers = [t[0] for t in log]
+    check(total >= 100 and len(log) == 64 and numbers == list(range(total - 64, total)),
+          f'log: {total} entries so far, the last 64 kept and read back three at a time, in order '
+          f'({numbers[0]}..{numbers[-1]})')
+    r = command(e, [STATUS, 4, total & 0xFF, total >> 8])
+    check(r[4] == 0 and (r[1] | r[2] << 8) == total, 'asked from the end: nothing new')
+
+    # an ordinary reading is logged now and then for comparison
+    e.run_until(lambda: False, 15 * 230)              # 230 scans x 10 keys: over 2,048 paired readings
+    r = command(e, [STATUS, 4, 0, 0])
+    kinds = []
+    first = e.r32(syms['stray_count']) - 64
+    for _ in range(30):
+        r = command(e, [STATUS, 4, first & 0xFF, (first >> 8) & 0xFF])
+        if not r[4]:
+            break
+        kinds += [r[5 + 19 * i + 14] for i in range(r[4])]
+        first += r[4]
+    check(0 in kinds, f'one ordinary paired reading in 2,048 is logged as kind 0, for comparison ({kinds.count(0)} in the log)')
+
+    # USB frame timestamps
+    GINTMSK = OTG + 0x18
+    check(not R(e, GINTMSK) & (1 << 3) and e.r32(syms['board_sof_cycles']) == 0, 'USB frame starts are not timestamped by default')
+    r = command(e, [STATUS, 7, 1])
+    check(r[0] == STATUS and R(e, GINTMSK) & (1 << 3), 'request 7 turns the start-of-frame interrupt on')
+    e.p.gintsts = 1 << 3
+    e.fire(16 + 77)
+    e.p.gintsts = 0
+    stamp = e.r32(syms['board_sof_cycles'])
+    check(stamp == R(e, 0xE0001004) and stamp != 0, f'each frame start notes the cycle counter ({stamp})')
+    e.rank_effect = rank_effect
+    hit[(0, 6)] = 40
+    e.run_until(lambda: (0, 6) not in hit, 40)
+    e.rank_effect = None
+    e.run_until(lambda: False, 5)
+    total, log = strays(e, e.r32(syms['stray_count']) - 3)
+    mine = [t for t in log if t[2:] == (kidx[space], 1, 40, 0)]
+    check(mine and sofs[mine[-1][0]] == stamp, 'and a logged stray reading carries the last one')
+    command(e, [STATUS, 7, 0])
+    e.run_until(lambda: False, 5)
+    check(e.r32(syms['board_sof_cycles']) == 0 and command(e, [STATUS, 7, 2])[0] == 0xFF,
+          'off again: no timestamp kept; any other value is refused')
+
+    # --- pin diagnostics ---
+    PA, PB, PC = PORT['A'], PORT['B'], PORT['C']
+    reads = [0]
+
+    def wave(port):
+        def read(_n):
+            reads[0] += 1
+            # PA4 high all the time, PA6 toggling every third sample
+            return (1 << 4) | (((reads[0] // 3) & 1) << 6) if port == PA else 0
+        return read
+    e.p.idr = {PA: wave(PA), PC: wave(PC)}
+    r = command(e, [STATUS, 5, 0], limit=600)
+    samples = (r[2] | r[3] << 8) * 256
+    ch = [r[4 + 2 * p] | r[5 + 2 * p] << 8 for p in range(16)]
+    hi = [r[36 + p] for p in range(16)]
+    check(r[0] == STATUS and r[1] == 0 and samples >= 1024 and abs(ch[6] - samples / 3) <= samples / 30 + 2
+          and all(ch[p] == 0 for p in range(16) if p != 6) and hi[4] == 255 and 40 <= hi[6] <= 215 and hi[0] == 0,
+          f'pin activity: port A watched for 20 ms ({samples} samples): PA6 changes level {ch[6]} times and is high '
+          f'{hi[6] * 100 // 255}% of the time, PA4 is high throughout, nothing else moves')
+    r = command(e, [STATUS, 5, 2], limit=600)
+    check(r[1] == 2 and not any(r[4:36]), 'port C: nothing changes')
+    check(command(e, [STATUS, 5, 5])[0] == 0xFF, 'there is no port 5')
+    e.p.idr = {}
+
+    before = {p: (R(e, p), R(e, p + 0xC)) for p in (PA, PB, PC)}
+    bits = lambda port, pin: ((R(e, port) >> (2 * pin)) & 3, (R(e, port + 0xC) >> (2 * pin)) & 3)   # noqa: E731
+    r = command(e, [STATUS, 6, 0, 6, 4])
+    check(r[0] == STATUS and (r[1], r[2], r[3], r[4]) == (0, 6, 0, 2) and bits(PA, 6) == (0, 2),
+          'pin override: PA6 becomes an input with pull-down')
+    others = all((R(e, p) | m) == (before[p][0] | m) and (R(e, p + 0xC) | m) == (before[p][1] | m)
+                 for p, m in ((PA, 3 << 12), (PB, 0), (PC, 0)))
+    check(others, 'and no other pin\'s mode or pull changes')
+    command(e, [STATUS, 6, 0, 5, 1])
+    command(e, [STATUS, 6, 2, 4, 3])
+    check(bits(PA, 5) == (3, 0) and bits(PC, 4) == (0, 1), 'PA5 analog, PC4 input with pull-up')
+    for port, pin in ((0, 6), (0, 5), (2, 4)):
+        command(e, [STATUS, 6, port, pin, 0])
+    check(all((R(e, p), R(e, p + 0xC)) == before[p] for p in (PA, PB, PC)),
+          'mode 0 puts every pin back as the stock firmware leaves it')
+    bad = {'PA7 (a sensor line)': [0, 7, 1], 'PA8 (a column line)': [0, 8, 1], 'PC9 (the LEDs)': [2, 9, 1],
+           'PA13 (debug)': [0, 13, 1], 'port 3': [3, 4, 1], 'mode 5 (no outputs)': [0, 6, 5]}
+    refused = {why: command(e, [STATUS, 6] + c)[0] for why, c in bad.items()}
+    check(all(v == 0xFF for v in refused.values()) and all((R(e, p), R(e, p + 0xC)) == before[p] for p in (PA, PB, PC)),
+          f'refused for any other pin or mode ({[w for w, v in refused.items() if v != 0xFF]})')
+    e.run_until(lambda: False, 60)
+    check(not pressed(e) and status(e)['faults'] == 0, 'and the keyboard carries on scanning')
+    bad_flash = [hex(a) for a in e.flash_report() if not (0x08040000 <= a < 0x08080000)]
+    check(not bad_flash, f'no flash changed outside sectors 6/7 {bad_flash}')
+
+
+class UsbHost:
+    """A host on the other end of the emulated OTG_HS core, for [22].
+
+    Bus events (reset, suspend, resume, SOF) set their GINTSTS bits, and the
+    interrupt runs only when the firmware has unmasked the event and has the
+    USB interrupt enabled. SETUP packets arrive the way the core delivers
+    them: RXFLVL, the status word popped from GRXSTSP, the packet read from
+    the FIFO, then DOEPINT0.STUP. An IN transfer the firmware arms completes
+    at once (the host took the packet). That is enough for TinyUSB's own
+    enumeration, suspend, resume and remote wake-up code to run unmodified."""
+
+    SOF, RXFLVL, ESUSP, USBSUSP, USBRST, ENUMDNE = 1 << 3, 1 << 4, 1 << 10, 1 << 11, 1 << 12, 1 << 13
+    IEPINT, OEPINT, WKUINT = 1 << 18, 1 << 19, 1 << 31
+    GINTSTS, GINTMSK, GRXSTSP, FIFO0 = OTG + 0x14, OTG + 0x18, OTG + 0x20, OTG + 0x1000
+    DCFG, DCTL, DIEPMSK, DOEPMSK, DAINT, DAINTMSK = (OTG + o for o in (0x800, 0x804, 0x810, 0x814, 0x818, 0x81C))
+    NVIC_ISER2, NVIC_ICER2, IRQ_BIT = 0xE000E108, 0xE000E188, 1 << (77 - 64)   # OTG_HS is interrupt 77
+
+    def __init__(self, e: 'Cfw'):
+        self.e = e
+        self.rx = collections.deque()          # (GRXSTSP word, FIFO words) not yet read
+        self.words = collections.deque()       # FIFO words of the entry popped last
+        self.diepint = [0] * 6
+        self.doepint = [0] * 6
+        self.irq_on = False                    # NVIC enable for the OTG_HS interrupt
+        self.acks = 0                          # EP0 IN transfers armed (status stages)
+        self.stalled = False
+        self.wake = []                         # (tick, 1 or 0): DCTL.RWUSIG set / cleared
+        p = e.p
+        get, write, step = p.get, p.write, e.step
+
+        def get_(a):
+            if a == self.GINTSTS:
+                return self.status()
+            if a == self.GRXSTSP:
+                if not self.rx:
+                    return 0
+                word, data = self.rx.popleft()
+                self.words = collections.deque(data)
+                if (word >> 17) & 0xF == 4:    # SETUP stage done popped: the core raises STUP
+                    self.doepint[0] |= 1 << 3
+                return word
+            if a == self.FIFO0:
+                return self.words.popleft() if self.words else 0
+            if a == self.DAINT:
+                return self.daint()
+            n, reg = divmod(a - (OTG + 0x900), 0x20)
+            if 0 <= n < 6 and reg == 8:
+                return self.diepint[n]
+            n, reg = divmod(a - (OTG + 0xB00), 0x20)
+            if 0 <= n < 6 and reg == 8:
+                return self.doepint[n]
+            return get(a)
+
+        def write_(uc, addr, size, value):
+            a = addr & ~3
+            if size == 4:
+                if a == self.GINTSTS:          # write 1 to clear
+                    p.gintsts &= ~value
+                elif a == self.NVIC_ISER2 and value & self.IRQ_BIT:
+                    self.irq_on = True
+                elif a == self.NVIC_ICER2 and value & self.IRQ_BIT:
+                    self.irq_on = False
+                elif a == self.DCTL and (value ^ p.regs.get(a, 0)) & 1:
+                    self.wake.append((e.ticks, value & 1))
+                n, reg = divmod(a - (OTG + 0x900), 0x20)
+                if 0 <= n < 6 and reg == 8:
+                    self.diepint[n] &= ~value
+                elif 0 <= n < 6 and reg == 0:
+                    if value & (1 << 21) and n == 0:
+                        self.stalled = True
+                    if value & (1 << 31):      # EPENA: armed, and the host takes it
+                        self.diepint[n] |= 1   # XFRC
+                        self.acks += n == 0
+                    value &= ~(0x33 << 26)     # EPENA, EPDIS, SNAK, CNAK clear themselves
+                n, reg = divmod(a - (OTG + 0xB00), 0x20)
+                if 0 <= n < 6 and reg == 8:
+                    self.doepint[n] &= ~value
+            write(uc, addr, size, value)
+
+        def step_(*args, **kw):
+            step(*args, **kw)
+            self.pump()
+        p.get, p.write, e.step = get_, write_, step_
+
+    def daint(self):
+        r = self.e.p.regs
+        im, om = r.get(self.DIEPMSK, 0), r.get(self.DOEPMSK, 0)
+        return (sum(1 << n for n in range(6) if self.diepint[n] & im)
+                | sum(1 << (16 + n) for n in range(6) if self.doepint[n] & om))
+
+    def status(self):
+        s = self.e.p.gintsts
+        if self.rx:
+            s |= self.RXFLVL
+        d = self.daint() & self.e.p.regs.get(self.DAINTMSK, 0)
+        return s | (self.IEPINT if d & 0xFFFF else 0) | (self.OEPINT if d >> 16 else 0)
+
+    def unmasked(self, bits):
+        return self.e.p.regs.get(self.GINTMSK, 0) & bits == bits
+
+    def pump(self):
+        """Run the OTG_HS interrupt for as long as its line is asserted and
+        the firmware has the interrupt enabled (TinyUSB switches it off for
+        short stretches; it then runs after a later step)."""
+        e = self.e
+        for _ in range(16):
+            if (e.in_bootloader or not self.irq_on or not e.p.regs.get(OTG + 8, 0) & 1
+                    or not self.status() & e.p.regs.get(self.GINTMSK, 0)):
+                return
+            e.fire(16 + 77)
+        raise RuntimeError('OTG_HS interrupt stays asserted')
+
+    def signal(self, bits):
+        """A bus event: its status bits, and the interrupt if unmasked.
+        Returns whether the firmware had it unmasked."""
+        seen = bool(self.e.p.regs.get(self.GINTMSK, 0) & bits)
+        self.e.p.gintsts |= bits
+        self.pump()
+        return seen
+
+    def reset(self):
+        """Bus reset, then the end of reset (speed detected: high speed)."""
+        self.signal(self.USBRST)
+        self.signal(self.ENUMDNE)
+        self.e.run_until(lambda: False, 20)       # tud_task handles the reset
+
+    def control(self, request_type, request, value=0, index=0, steps=80):
+        """A control request without a data stage. True if the keyboard
+        answered it with a status stage and did not stall."""
+        w0, w1 = struct.unpack('<II', struct.pack('<BBHHH', request_type, request, value, index, 0))
+        acks, self.stalled = self.acks, False
+        self.rx.append((6 << 17 | 8 << 4, (w0, w1)))   # SETUP packet, 8 bytes, endpoint 0
+        self.rx.append((4 << 17, ()))                  # SETUP stage done
+        self.pump()
+        self.e.run_until(lambda: self.acks > acks or self.stalled, steps)
+        self.e.run_until(lambda: False, 5)             # status stage completion handled
+        return self.acks > acks and not self.stalled
+
+    def enumerate(self, address=7):
+        """Reset, SET_ADDRESS, SET_CONFIGURATION 1, then SET_FEATURE
+        DEVICE_REMOTE_WAKEUP as a PC does before it goes to sleep."""
+        self.reset()
+        return (self.control(0x00, 5, address) and self.control(0x00, 9, 1)
+                and self.control(0x00, 3, 1))
+
+
+def sleep_lights_v75(image, syms, rest, build_id, base, led_map, keys, kidx):
+    """[22] Lighting while the PC is asleep (v7.5): dark while the USB bus is
+    suspended after a working connection, back as it was on resume."""
+    print('[22] PC sleep v7.5 (LEDs dark while the USB bus is suspended, back as they were on resume)')
+    from unicorn import UC_HOOK_CODE
+    H = UsbHost
+    gamma = json.loads((base / 'backup' / 'stock-gamma.json').read_text())
+    key_to_led = [led_map[r * COLS + c] for r, c in keys]
+    DEFAULT = [(gamma[97], 0, 0)] * 68                 # the start-up look checked in [10]
+    DARK = [(0, 0, 0)] * 68
+    W, CAPS, KEYBOARD = (1, 2), (2, 0), 0
+    confirmed = struct.pack('<I', build_id)
+    slots_at, slots_end = syms['rgb_slots'], syms['rgb_slots'] + 2 * 24 * 68
+    LED_STREAM = 0x40026000 + 0x10 + 0x18 * 2          # DMA1 Stream 2 control register
+
+    def decode(sl):
+        bits = [1 if v == 67 else 0 for v in sl]
+        byte = lambda k: sum(b << (7 - j) for j, b in enumerate(bits[k * 8:(k + 1) * 8]))   # noqa: E731
+        return byte(1), byte(0), byte(2)               # (R, G, B) from wire G, R, B
+
+    def boot(journal):
+        """A keyboard with a host model on its USB core. Every LED the
+        firmware writes is logged from the LED buffer itself, from the moment
+        the buffer is being sent to the LEDs (rgb_init() fills it with an
+        all-off frame first, as it always has). The host takes every HID
+        report at once; whether an interface is ready to send is left to
+        TinyUSB (mounted, not suspended)."""
+        e = Cfw(image, syms, rest, journal=journal)
+        e.host = UsbHost(e)
+        e.drawn = []                                   # (LED, (R, G, B)) per LED written
+        e.reports = []                                 # (interface, report id, bytes)
+        pending = {}
+
+        def on_slot(uc, access, addr, size, value, data):
+            if not e.p.regs.get(LED_STREAM, 0) & 1:
+                return
+            led, slot = divmod((addr - slots_at) // 2, 24)
+            pending.setdefault(led, [29] * 24)[slot] = value
+            if slot == 23:
+                e.drawn.append((led, decode(pending.pop(led))))
+
+        def on_report(uc, addr, size, data):
+            itf, rid, buf, n = (uc.reg_read(r) for r in (UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3))
+            e.reports.append((itf, rid, bytes(uc.mem_read(buf, n))))
+            uc.reg_write(UC_ARM_REG_R0, 1)
+            uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
+        e.uc.hook_add(UC_HOOK_MEM_WRITE, on_slot, begin=slots_at, end=slots_end - 1)
+        a = syms['tud_hid_n_report'] & ~1
+        e.uc.hook_add(UC_HOOK_CODE, on_report, begin=a, end=a)
+        e.run_until(lambda: e.r8('baseline_ready') == 1 and e.p.regs.get(OTG + 0x18, 0) != 0, 3000)
+        e.run_until(lambda: False, 120)
+        return e
+
+    def leds(e):
+        sl = struct.unpack('<%dH' % (68 * 24), e.uc.mem_read(slots_at, 2 * 68 * 24))
+        return [decode(sl[i * 24:(i + 1) * 24]) for i in range(68)]
+
+    run = lambda e, steps, **kw: e.run_until(lambda: False, steps, **kw)           # noqa: E731
+    asleep = lambda e: e.r8('rgb_asleep') == 1                                     # noqa: E731
+    mounted = lambda e: e.call(syms['tud_mounted']) & 1                            # noqa: E731
+    suspended = lambda e: e.call(syms['tud_suspended']) & 1                        # noqa: E731
+    frames = lambda e: e.r32(syms['frame_count'])                                  # noqa: E731
+    tick = lambda e: e.r32(syms['uwTick'])                                         # noqa: E731
+    dark_writes = lambda e, since=0: [d for d in e.drawn[since:] if d[1] == (0, 0, 0)]   # noqa: E731
+    # Keys held in a keyboard report: modifiers and the key bitmap (the six
+    # bytes between them are only there for hosts that use the boot protocol)
+    keys_down = lambda rep: rep[0] != 0 or any(rep[8:])                            # noqa: E731
+    flash = lambda e: bytes(e.uc.mem_read(0x08000000, 0x80000))                    # noqa: E731
+
+    def settle(e):
+        """The picture for the current state is fully in the LED buffer."""
+        complete_frame_after(e, syms, tick(e))
+        return leds(e)
+
+    def sleep(e, limit=80):
+        """The host stops talking (bus suspended). Returns whether the
+        suspend interrupt was unmasked, and the LED writes that followed."""
+        n = len(e.drawn)
+        seen = e.host.signal(H.USBSUSP | H.ESUSP)
+        e.run_until(lambda: asleep(e), limit)
+        run(e, 10)
+        return seen, e.drawn[n:]
+
+    def one_dark_frame(writes):
+        """Whatever was left of the frame in progress, then every LED
+        written dark exactly once."""
+        return (len(writes) >= 68 and sorted(led for led, _ in writes[-68:]) == list(range(68))
+                and all(c == (0, 0, 0) for _, c in writes[-68:]))
+
+    def wake(e, bits, limit=80):
+        seen = e.host.signal(bits)
+        e.run_until(lambda: not asleep(e), limit)
+        return seen
+
+    # --- 1. start-up: nothing before a working connection darkens the LEDs ---
+    e = boot(confirmed)
+    host = e.host
+    check(leds(e) == DEFAULT and not asleep(e) and not dark_writes(e),
+          f'start-up on a silent bus: the usual start-up look, no LED ever written dark ({len(e.drawn)} LED writes)')
+    seen = host.signal(H.USBSUSP | H.ESUSP)
+    run(e, 100)
+    check(not seen and not suspended(e) and not asleep(e) and not dark_writes(e),
+          'bus idle before the host has reset it: the suspend interrupt is still masked, nothing happens')
+    host.reset()
+    seen = host.signal(H.USBSUSP | H.ESUSP)
+    run(e, 100)
+    check(seen and not suspended(e) and not asleep(e) and not dark_writes(e) and leds(e) == DEFAULT,
+          'bus idle after a reset, before the host has sent anything: TinyUSB ignores the suspend, LEDs unchanged')
+    host.reset()
+    ok = host.control(0x00, 5, 7)                      # SET_ADDRESS 7
+    addr = (e.p.regs.get(H.DCFG, 0) >> 4) & 0x7F
+    seen = host.signal(H.USBSUSP | H.ESUSP)
+    run(e, 150)
+    check(ok and addr == 7 and seen and suspended(e) and not mounted(e) and not asleep(e)
+          and not dark_writes(e) and leds(e) == DEFAULT,
+          f'addressed (address {addr}) but not configured, bus suspended: TinyUSB reports the suspend, '
+          'but the LEDs stay on (no working connection yet)')
+    host.signal(H.WKUINT)
+    ok = host.control(0x00, 9, 1) and host.control(0x00, 3, 1)    # SET_CONFIGURATION 1, wake-up allowed
+    run(e, 60)
+    ready = e.call(syms['tud_hid_n_ready'], KEYBOARD) & 1
+    check(ok and mounted(e) and not suspended(e) and ready and leds(e) == DEFAULT and not dark_writes(e),
+          f'the host configures the keyboard: mounted, keyboard interface ready, and the LEDs never went dark '
+          f'on the way ({len(e.drawn)} LED writes, none dark)')
+
+    # --- 2. suspend on a still picture (Solid, Caps Lock indicator showing) ---
+    buf = (syms['_ebss'] + 0x200) & ~3
+    e.uc.mem_write(buf, bytes([0x02]))
+    e.call(syms['tud_hid_set_report_cb'], KEYBOARD, 0, 2, buf, 1)    # host: Caps Lock on
+    before = settle(e)
+    caps = key_to_led[kidx[CAPS]]
+    cfg = bytes(e.uc.mem_read(syms['rgb_config'], 16))
+    colours = bytes(e.uc.mem_read(syms['rgb_key_colors'], 204))
+    flash0, writes0, erases0 = flash(e), len(e.flash_writes), len(e.p.erases)
+    seen, writes = sleep(e)
+    check(seen and suspended(e) and asleep(e) and len(writes) == 68 and one_dark_frame(writes) and leds(e) == DARK,
+          f'bus suspended after a working connection: one all-off frame ({len(writes)} LED writes, all dark), '
+          'every LED off')
+    n, f0, cols0, t0 = len(e.drawn), frames(e), len(e.col_log), e.ticks
+    run(e, 400)
+    check(len(e.drawn) == n and frames(e) == f0 and leds(e) == DARK and len(e.col_log) > cols0 + 300,
+          f'asleep for {e.ticks - t0} ms: no LED written, no frame started, '
+          f'key scan still running ({len(e.col_log) - cols0} columns converted)')
+
+    # --- 3. a key press while suspended asks the host to wake up ---
+    r0 = len(e.reports)
+    host.wake.clear()
+    e.press[W] = -900
+    e.run_until(lambda: e.is_pressed(kidx[W]), 400)
+    pressed = e.is_pressed(kidx[W])
+    e.run_until(lambda: len(host.wake) >= 2, 900)      # RWUSIG is held for about 1 ms of CPU time
+    sof = host.unmasked(H.SOF)
+    check(pressed and [v for _, v in host.wake] == [1, 0] and sof,
+          f'W pressed while suspended: it registers, and the keyboard signals remote wake-up '
+          f'(DCTL.RWUSIG set, then cleared: {host.wake}); SOF interrupt unmasked to see the bus come back')
+    run(e, 100)
+    held = [r for r in e.reports[r0:] if r[0] == KEYBOARD]
+    check(asleep(e) and len(e.drawn) == n and leds(e) == DARK and not held,
+          'until the host answers: still dark, nothing drawn, the key report held back')
+    host.signal(H.SOF)                                 # the host resumed the bus: frames are back
+    e.run_until(lambda: not asleep(e), 80)
+    e.run_until(lambda: any(r[0] == KEYBOARD and keys_down(r[2]) for r in e.reports[r0:]), 200)
+    sent = [r[2] for r in e.reports[r0:] if r[0] == KEYBOARD and keys_down(r[2])]
+    after = settle(e)
+    check(not suspended(e) and not asleep(e) and after == before and before[caps] != before[0]
+          and before != DARK,
+          f'the bus comes back (first SOF): lighting exactly as before the sleep, Caps Lock indicator '
+          f'included (Caps {after[caps]}, others {after[0]})')
+    check(bool(sent), f'and the key that woke the PC is then sent ({len(sent)} keyboard report(s) with a key)')
+    e.press.pop(W)
+    e.run_until(lambda: not e.is_pressed(kidx[W]), 400)
+    run(e, 40)
+    check(bytes(e.uc.mem_read(syms['rgb_config'], 16)) == cfg
+          and bytes(e.uc.mem_read(syms['rgb_key_colors'], 204)) == colours
+          and flash(e) == flash0 and len(e.flash_writes) == writes0 and len(e.p.erases) == erases0,
+          f'settings and key colours untouched, nothing written to flash by the suspend and resume '
+          f'({len(e.flash_writes) - writes0} flash writes)')
+
+    # --- 4. suspend on an animated effect, resume from the host (WKUINT) ---
+    e.uc.mem_write(syms['rgb_config'] + 1, bytes([2]))             # Rainbow Wave (not a settings change)
+    wait_frames(e, 3)
+    cfg = bytes(e.uc.mem_read(syms['rgb_config'], 16))
+    seen, writes = sleep(e)
+    n, f0 = len(e.drawn), frames(e)
+    run(e, 400)
+    check(seen and one_dark_frame(writes) and leds(e) == DARK and len(e.drawn) == n and frames(e) == f0,
+          f'Rainbow Wave, bus suspended: the frame in progress is finished, then one all-off frame, '
+          f'and nothing is drawn for 400 ms ({len(e.drawn) - n} LED writes, {frames(e) - f0} frames)')
+    seen = wake(e, H.WKUINT)
+    f0, n = frames(e), len(e.drawn)
+    wait_frames(e, 3)
+    pic1 = leds(e)
+    wait_frames(e, 3)
+    pic2 = leds(e)
+    drawn, nf = len(e.drawn) - n, frames(e) - f0
+    check(seen and not suspended(e) and drawn >= 68 * (nf - 1) and nf >= 6 and pic1 != pic2
+          and all(sum(c) > 0 for c in pic1 + pic2) and not dark_writes(e, n)
+          and bytes(e.uc.mem_read(syms['rgb_config'], 16)) == cfg,
+          f'the host resumes the bus (WKUINT): Rainbow Wave is running again ({drawn} LED writes over {nf} '
+          'frames, every LED lit, the picture moving), same settings')
+
+    # --- 5. a PC starting from shut-down resets the bus without resuming it ---
+    e.uc.mem_write(syms['rgb_config'] + 1, bytes([0]))             # Solid
+    wait_frames(e, 3)
+    before = settle(e)
+    seen, writes = sleep(e)
+    was_dark = one_dark_frame(writes) and leds(e) == DARK
+    host.reset()
+    e.run_until(lambda: not asleep(e), 80)
+    unmounted = not mounted(e)
+    after = settle(e)
+    check(seen and was_dark and unmounted and after == before,
+          'suspended, then a bus reset with no resume before it (PC switched on): the lighting is back at once, '
+          'before the host has configured the keyboard again')
+    check(host.enumerate() and mounted(e), 'and the keyboard enumerates again')
+
+    # --- 6. idle dimming carries on where it was ---
+    def set_idle(minutes):
+        e.uc.mem_write(syms['rgb_config'] + 9, bytes([minutes]))
+
+    travel = lambda: max(e.r8('key_matrix', k * 10 + 6) for k in range(68))        # noqa: E731
+
+    def tap(rc):
+        e.press[rc] = -900
+        e.run_until(lambda: e.is_pressed(kidx[rc]), 400)
+        run(e, 30)
+        e.press.pop(rc)
+        e.run_until(lambda: not e.is_pressed(kidx[rc]) and travel() == 0, 600)     # fully back up
+        run(e, 30)
+
+    set_idle(1)                                        # fade out after 1 minute without typing
+    tap(W)                                             # typed just before the PC goes to sleep
+    lit = settle(e)
+    seen, writes = sleep(e)
+    t0, n, f0 = e.ticks, len(e.drawn), frames(e)
+    writes1 = len(e.flash_writes)
+    e.run_until(lambda: e.ticks >= t0 + 70000, 8000, ticks=10)     # asleep for longer than the idle time
+    slept = e.ticks - t0
+    check(seen and lit == before and one_dark_frame(writes) and slept >= 70000 and not e.in_bootloader
+          and asleep(e) and leds(e) == DARK and len(e.drawn) == n and frames(e) == f0
+          and len(e.flash_writes) == writes1,
+          f'confirmed build asleep for {slept // 1000} s: stays in the application, dark, nothing drawn, '
+          'nothing written to flash')
+    wake(e, H.WKUINT)
+    after = settle(e)
+    run(e, 300)
+    check(after == lit and leds(e) == lit and e.r8('rgb_idle_level') == 255,
+          f'idle dimming set to 1 minute, lit before a {slept // 1000} s sleep: lit again after it and stays lit '
+          '(the time asleep does not count as time without typing)')
+    e.uc.mem_write(syms['rgb_last_activity'], struct.pack('<I', (tick(e) - 61000) & 0xFFFFFFFF))
+    e.uc.mem_write(syms['rgb_idle_level'], bytes([0]))             # as after a minute without typing
+    faded = settle(e)
+    seen, writes = sleep(e)
+    was_dark = one_dark_frame(writes) and leds(e) == DARK
+    wake(e, H.WKUINT)
+    after = settle(e)
+    run(e, 200)
+    check(all(c == (0, 0, 0) for i, c in enumerate(faded) if i != caps) and faded[caps] == lit[caps]
+          and was_dark and after == faded and leds(e) == faded and e.r8('rgb_idle_level') == 0 and not asleep(e),
+          'faded out by idle dimming before the sleep (only the Caps Lock indicator showing): the same after a '
+          'wake without a key press')
+    sleep(e)
+    host.wake.clear()
+    r0 = len(e.reports)
+    e.press[W] = -900                                  # a tap: down, wake-up signalled, up again
+    e.run_until(lambda: len(host.wake) >= 2, 1300)
+    e.press.pop(W)
+    run(e, 150)
+    still_dark = asleep(e) and leds(e) == DARK
+    host.signal(H.SOF)                                 # only now does the host bring the bus back
+    e.run_until(lambda: not asleep(e), 80)
+    e.run_until(lambda: e.r8('rgb_idle_level') == 255 and not e.is_pressed(kidx[W]), 600)
+    after = settle(e)
+    run(e, 40)
+    typed = [keys_down(r[2]) for r in e.reports[r0:] if r[0] == KEYBOARD]
+    check([v for _, v in host.wake] == [1, 0] and still_dark and after == lit,
+          'and when a key is tapped there, the PC is asked to wake, and the lighting comes back once it has')
+    check(typed[:1] == [True] and typed[-1:] == [False] and not e.is_pressed(kidx[W]),
+          f'the tap reaches the host after the wake as a press and a release, no key left stuck ({typed})')
+    set_idle(0)
+    bad = [hex(a) for a in e.flash_report() if not (0x08040000 <= a < 0x08080000)]
+    check(not bad and not e.in_bootloader and not e.fault, f'no flash changed outside sectors 6/7 {bad}')
+
+    # --- 7. fail-safe: an unconfirmed build that is put to sleep ---
+    e = boot(b'')
+    host = e.host
+    ok = host.enumerate()
+    t_mount = e.ticks
+    run(e, 40)
+    flash0 = flash(e)
+    seen, writes = sleep(e)
+    t_sleep, n = e.ticks, len(e.drawn)
+    armed = e.r8('failsafe_armed')
+    e.run_until(lambda: e.ticks >= 9600, 3000, ticks=4)
+    flash1 = flash(e)
+    diff = [0x08000000 + i for i in range(0, 0x80000, 4) if flash1[i:i + 4] != flash0[i:i + 4]]
+    check(ok and seen and armed == 1 and t_sleep < 4000 and one_dark_frame(writes),
+          f'unconfirmed build: enumerates at {t_mount} ms and is suspended at {t_sleep} ms, '
+          'before its 5 s confirmation: LEDs off')
+    check(e.ticks >= 9600 and not e.in_bootloader and e.r8('usb_fallback_done') == 0 and e.r8('usb_use_hs') == 1
+          and asleep(e) and leds(e) == DARK and len(e.drawn) == n,
+          f'still suspended at {e.ticks} ms: no full-speed restart at 4 s, no hand-over to the bootloader at 9 s, '
+          'still dark')
+    check(e.r8('failsafe_armed') == 0 and diff == [0x08040000] and e.r32(0x08040000) == build_id,
+          f'the build is confirmed after its 5 s mounted as usual, and that entry is the only flash write '
+          f'while suspended ({[hex(a) for a in diff]})')
+    wake(e, H.WKUINT)
+    check(settle(e) == DEFAULT and not e.in_bootloader, 'and its lighting comes back on resume')
+
+    # --- 8. fail-safe: an unconfirmed build on a bus that only ever looks suspended ---
+    e = boot(b'')
+    host = e.host
+    host.signal(H.USBSUSP | H.ESUSP)                   # idle bus from the start
+    host.reset()                                       # a reset, but the host never sends anything
+    seen = host.signal(H.USBSUSP | H.ESUSP)
+    e.run_until(lambda: e.ticks >= 4100, 6000, ticks=4)
+    fell_back = e.r8('usb_use_hs') == 0 and e.r8('usb_fallback_done') == 1 and not e.in_bootloader
+    host.signal(H.USBSUSP | H.ESUSP)
+    never_dark = not dark_writes(e) and not asleep(e) and leds(e) == DEFAULT
+    e.run_until(lambda: e.in_bootloader, 3000, ticks=4)
+    check(seen and fell_back and never_dark and e.in_bootloader and 8900 <= e.ticks <= 9100,
+          f'unconfirmed build that never enumerates on an idle bus: LEDs stay on, full-speed restart at 4 s, '
+          f'and the vendor bootloader after ~9 s as before (t={e.ticks} ms)')
+    bad = [hex(a) for a in e.flash_report() if not (0x08040000 <= a < 0x08080000)]
+    check(not bad, f'no flash changed outside sectors 6/7 {bad}')
+
+
+def main_loop_v75(image, syms, rest, build_id, keys, kidx):
+    """[24] v7.5: a main loop pass leaves a key alone when its filtered value
+    did not change, and a changed setting still reaches such a key (one pass
+    per millisecond goes through every key)."""
+    print('[24] v7.5 main loop (keys nothing happened to are left alone, settings still reach them)')
+    SET_ACTUATION, STATUS = 131, 0x6B
+    RUNNING = 1
+    confirmed = struct.pack('<I', build_id)
+    rc = (1, 2)                                      # W
+    k = kidx[rc]
+
+    def boot(speed, level):
+        journal = confirmed.ljust(0x10000, b'\xff') + rgb_record(3, bytes([speed, level, 0, 0]))
+        e = Cfw(image, syms, rest, journal=journal)
+        e.stub_usb_host()
+        e.run_until(lambda: e.r8('baseline_ready') == 1 and e.p.regs.get(OTG + 0x18, 0) != 0, 3000)
+        e.run_until(lambda: False, 700)
+        e.run_until(lambda: e.r8('speed_state') != 1 and e.r8('probe_state') != RUNNING
+                    and e.r8('baseline_pass') == 0xFF, 900)
+        return e
+
+    def command(e, payload):
+        scratch = (syms['_ebss'] + 0x100) & ~3
+        e.uc.mem_write(scratch, bytes(payload) + bytes(64 - len(payload)))
+        e.uc.mem_write(syms['out_buf'], bytes([0]) + bytes([0xAA]) * 63)
+        enqueue(e, scratch)
+        e.run_until(lambda: e.uc.mem_read(syms['out_buf'], 1)[0] != 0, 400)
+        return bytes(e.uc.mem_read(syms['out_buf'], 64))
+
+    def filtered(e):
+        return e.r16(syms['key_matrix'] + k * 10)
+
+    def travel(e):
+        return e.r8('key_matrix', k * 10 + 6)
+
+    def seen_by_layout(e):
+        # the keycode the layout holds for the key while it is down (0 = none)
+        return e.r8('active_keycodes', k) != 0
+
+    def actuation(e, point, rt_down=0):
+        """Set W's actuation point; returns the milliseconds until the key's state follows, and
+        whether its filtered value stayed the same throughout."""
+        want = travel(e) >= point if rt_down == 0 else travel(e) > point
+        before = filtered(e)
+        r = command(e, [SET_ACTUATION, 0, k, 1, point, rt_down, 0, 0])
+        t0 = e.ticks
+        e.run_until(lambda: bool(e.is_pressed(k)) == want and seen_by_layout(e) == want, 40)
+        took = e.ticks - t0
+        ok = r[0] == SET_ACTUATION and bool(e.is_pressed(k)) == want and seen_by_layout(e) == want
+        e.run_until(lambda: False, 5)
+        return ok, took, filtered(e) == before, want
+
+    for speed, level, name in ((6, 3, 'Max, Fast smoothing'), (3, 1, 'Fastest, Smooth'), (6, 0, 'Max, Classic')):
+        e = boot(speed, level)
+        mode = command(e, [STATUS, 0])[2]
+        # hold W part of the way down, until its travel stands still
+        e.press[rc] = -300
+        prev, same = None, 0
+        for _ in range(1500):
+            e.step()
+            now = (filtered(e), travel(e))
+            same = same + 1 if now == prev else 0
+            prev = now
+            if same >= 60:
+                break
+        d = travel(e)
+        check(same >= 60 and 30 < d < 220 and mode == (7 if speed > 3 else 0),
+              f'{name}: W held part of the way down reads a steady travel of {d} (read mode {mode})')
+        steps = []
+        ok1, t1, still1, want1 = actuation(e, d - 15)
+        ok2, t2, still2, want2 = actuation(e, d + 15)
+        ok3, t3, still3, want3 = actuation(e, d - 15, rt_down=10)
+        ok4, t4, still4, want4 = actuation(e, d + 15, rt_down=10)
+        steps = [t1, t2, t3, t4]
+        check(ok1 and ok2 and (want1, want2) == (True, False) and still1 and still2 and max(t1, t2) <= 3,
+              f'{name}: its actuation point moved below, then above where it is held: pressed, then released, '
+              f'within {max(t1, t2)} ms and without its filtered value changing')
+        check(ok3 and ok4 and (want3, want4) == (True, False) and still3 and still4 and max(t3, t4) <= 3,
+              f'{name}: the same with Rapid Trigger on ({steps[2:]} ms)')
+        e.press.pop(rc)
+        e.run_until(lambda: travel(e) == 0 and not e.is_pressed(k), 800)
+        others = [i for i in range(68) if e.is_pressed(i)]
+        check(travel(e) == 0 and not e.is_pressed(k) and not seen_by_layout(e) and not others,
+              f'{name}: let go, W is back at rest and no key is pressed')
+        bad_flash = [hex(a) for a in e.flash_report() if not (0x08040000 <= a < 0x08080000)]
+        check(not bad_flash, f'{name}: no flash changed outside sectors 6/7 {bad_flash}')
 
 
 def check_handoff(e: Cfw):

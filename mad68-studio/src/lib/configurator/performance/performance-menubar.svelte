@@ -24,6 +24,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     performanceStateContext,
   } from "../context.svelte"
   import { actuationQueryContext } from "../queries/actuation-query.svelte"
+  import RestCheckDialog from "./rest-check-dialog.svelte"
 
   const performanceState = performanceStateContext.get()
   const { keys } = $derived(performanceState)
@@ -59,6 +60,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     </Toggle>
   </div>
   <div class="flex items-center gap-2">
+    <RestCheckDialog />
     <Button
       disabled={keys.size === 0}
       onclick={() => {

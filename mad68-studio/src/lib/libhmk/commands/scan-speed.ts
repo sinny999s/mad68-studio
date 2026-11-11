@@ -36,7 +36,8 @@ export type ScanSpeedInfo = {
   capturing: boolean
   /** Settle time in microseconds of each speed the firmware has */
   settleUs: number[]
-  /** Each speed's read mode (bit 0: three ADCs at once); [] before v7.4 */
+  /** Each speed's read mode (bit 0: three ADCs at once; bit 2, from v7.5:
+   * the bottom row read twice); [] before v7.4 */
   modes: number[]
   /** Each speed's ADC sample time code (2 = 28 cycles); [] before v7.4 */
   samples: number[]

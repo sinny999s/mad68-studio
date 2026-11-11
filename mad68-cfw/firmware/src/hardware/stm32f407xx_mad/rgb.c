@@ -28,6 +28,9 @@
 // Effects are computed once per 16 ms frame and drawn a few LEDs per main
 // loop pass. Spatial effects use each LED's key centre on a 224 x 64 grid.
 // Indicators (Caps Lock, active layer, profile) draw over the effect.
+//
+// While the PC is asleep (USB bus suspended) every LED is dark and nothing is
+// drawn; see the sleep section above rgb_task().
 
 #include "rgb.h"
 
@@ -38,6 +41,7 @@
 #include "matrix.h"
 
 #include "stm32f4xx_hal.h"
+#include "tusb.h"
 #include "xinput.h"
 
 #if defined(BOARD_RGB)
@@ -156,6 +160,7 @@ uint8_t rgb_key_colors[NUM_KEYS][3];
 uint8_t rgb_host_led_state;
 uint8_t rgb_idle_level = 255;
 uint32_t rgb_last_activity = 0;
+bool rgb_asleep = false; // dark because the PC is asleep
 
 static const uint8_t gamma_lut[256] = RGB_GAMMA_LUT;
 static const uint8_t key_to_led[NUM_KEYS] = RGB_KEY_TO_LED;
@@ -994,6 +999,55 @@ void rgb_init(void) {
   TIM3->CR1 = TIM_CR1_ARPE | TIM_CR1_URS | TIM_CR1_CEN; // 0x85 as stock
 }
 
+//--------------------------------------------------------------------+
+// PC sleep
+//--------------------------------------------------------------------+
+//
+// The LEDs go dark while the PC is asleep and come back when it wakes. The
+// PC is taken to be asleep while the USB bus is suspended (no traffic from the
+// host for 3 ms, reported by TinyUSB) after the host had configured the
+// keyboard. Requiring the configuration keeps the lighting on at start-up and
+// on a charger, where the bus is idle too but nobody has talked to the
+// keyboard yet, and it is the same test the fail-safe in board.c uses for a
+// working connection.
+//
+// This is looked at once per frame time, between frames, so the main loop
+// pays nothing for it. Going to sleep writes one all-off frame into the LED
+// buffer, which the DMA keeps sending; nothing is drawn after that. Waking
+// just lets the frames run again: the settings are never touched, so the same
+// effect, colours, brightness and indicators come back, and nothing is
+// written to flash either way. The bus state is read rather than taken from
+// TinyUSB's suspend and resume callbacks because a PC that starts up again
+// from shut-down resets the bus without resuming it first, and no callback
+// reports that.
+//
+// Idle dimming picks up where it was: the time asleep does not count as time
+// without typing, so lighting that was on comes back on and lighting that had
+// faded out stays out until a key is pressed. The key that wakes the PC is
+// such a key press: its report waits for the host (hid_send_reports()), so
+// the key still reads as pressed in the first frame after the sleep.
+static uint32_t sleep_since = 0; // when the LEDs went dark
+
+static bool host_asleep(void) { return tud_mounted() && tud_suspended(); }
+
+// Returns true while the LEDs are to stay dark.
+static bool sleep_update(uint32_t now) {
+  const bool asleep = host_asleep();
+  if (asleep != rgb_asleep) {
+    rgb_asleep = asleep;
+    if (asleep) {
+      sleep_since = now;
+      for (uint32_t led = 0; led < RGB_NUM_LEDS; led++)
+        rgb_write_grb(led, 0, 0, 0);
+    } else {
+      // A still picture is not drawn again on its own
+      drawn_still = false;
+      rgb_last_activity += now - sleep_since;
+    }
+  }
+  return asleep;
+}
+
 void rgb_task(void) {
   const uint32_t now = HAL_GetTick();
 
@@ -1004,7 +1058,8 @@ void rgb_task(void) {
 
   if (frame_cursor >= RGB_NUM_LEDS && now - last_frame >= RGB_FRAME_MS) {
     last_frame = now;
-    frame_begin(now);
+    if (!sleep_update(now))
+      frame_begin(now);
   }
   for (uint32_t n = 0; n < RGB_LEDS_PER_PASS && frame_cursor < RGB_NUM_LEDS;
        n++)

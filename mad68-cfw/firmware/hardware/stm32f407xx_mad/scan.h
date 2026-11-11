@@ -26,8 +26,9 @@
 //
 // Speeds 0-3 (v7.3) read with one ADC and differ only in the settle time.
 // Speeds 4-6 (v7.4) read with all three ADCs at once and power the next
-// column before storing the results (mode 3 below). Measured on a MAD68 HE:
-// about 4,740, 6,060 and 6,850 scans per second.
+// column before storing the results. Measured on a MAD68 HE: about 4,740,
+// 6,060 and 6,850 scans per second. From v7.5 they also read the bottom row
+// twice (mode 7 below), which takes no longer.
 #define SCAN_SPEED_RELAXED 0  // 40 us: the v7.2 timing, about 1,300 scans/s
 #define SCAN_SPEED_STANDARD 1 // 28 us: about the stock firmware's rate
 #define SCAN_SPEED_FAST 2     // 18 us
@@ -38,7 +39,7 @@
 #define SCAN_SPEED_COUNT 7
 #define SCAN_SPEED_DEFAULT SCAN_SPEED_STANDARD
 #define SCAN_SETTLE_US {40, 28, 18, 8, 8, 5, 5}
-#define SCAN_SPEED_MODES {0, 0, 0, 0, 3, 3, 3}
+#define SCAN_SPEED_MODES {0, 0, 0, 0, 7, 7, 7}
 #define SCAN_SPEED_SAMPLES {2, 2, 2, 2, 2, 2, 1}
 
 // A three-ADC speed is a request. The keyboard starts on one ADC, then
@@ -135,6 +136,12 @@ bool analog_baseline_busy(void);
 //           bit 1: once a column's results are in, the next column is
 //               powered and its settle time started before they are
 //               stored; clear: they are stored first
+//           bit 2 (v7.5, only with bit 0): ADC2 converts one row twice in a
+//               row (config.h ADC_PAIRED_*). The two readings, about 1.3 us
+//               apart, are averaged when they agree to within
+//               SCAN_PAIR_AGREE counts; when they do not, one of them is a
+//               stray reading and the one nearer the key's last reading is
+//               kept
 //           0 is how v7.3 reads the keys
 //   settle  wait after powering the column, in TIM10 ticks (F_CPU per
 //           second: 168 per microsecond)
@@ -155,7 +162,14 @@ bool analog_baseline_busy(void);
 #define SCAN_MODE_V73 0u
 #define SCAN_MODE_PARALLEL 0x01u
 #define SCAN_MODE_EARLY 0x02u
-#define SCAN_MODE_COUNT 4u
+#define SCAN_MODE_PAIRED 0x04u
+#define SCAN_MODE_COUNT 8u
+// Counts two readings of a resting or moving key, taken about 1.3 us apart,
+// can differ by (the noise is a few counts; a stray reading is 20 to 60 off)
+#define SCAN_PAIR_AGREE 16
+// A paired reading this far from the key's last one, with both readings
+// agreeing, is logged too (a disturbance longer than the gap, or a key moving)
+#define SCAN_PAIR_JUMP 24
 
 #define SCAN_TICKS_MIN 8u // shortest settle a probe accepts (ARR >= 1)
 #define SCAN_PROBE_LOG2_MIN 4u
@@ -189,9 +203,10 @@ bool analog_baseline_busy(void);
 //   probe runs. Replies like SCAN_STATUS.
 // SCAN_STATUS (0x6B): [1] 0 = status, 1 = results, 2 = status after
 //     clearing the filter delay statistics and starting to measure,
-//     3 = status after stopping that
+//     3 = status after stopping that, 4 = stray reading log, 5 = pin activity,
+//     6 = pin override, 7 = USB frame timestamps on or off (v7.5, below)
 //   Status reply:
-//     [1] test protocol version (2)
+//     [1] test protocol version (3)
 //     [2] live mode  [3..4] live settle ticks  [5] live sample code
 //     [6] flags (SCAN_FLAG_*)
 //     [7] probe state (SCAN_PROBE_*)  [8] probe error (SCAN_PROBE_ERR_*)
@@ -212,13 +227,49 @@ bool analog_baseline_busy(void);
 //     [40] 1 while filter delay is measured  [41..42] key presses measured
 //     (LE16)  [43..44] average, [45..46] shortest, [47..48] longest delay of
 //     the filtered value behind the reading, in microseconds (LE16)
+//     From test protocol version 3:
+//     [49..52] paired readings that disagreed since power-up (LE32)
 //   Results request: [2] first key. Reply: [1] probe state  [2] first key
 //     [3] number of keys that follow (up to 10), then for each key:
 //     average x 16 (LE16), lowest (LE16), highest (LE16) raw reading
 #define BOARD_COMMAND_SCAN_PROBE 0x6A
 #define BOARD_COMMAND_SCAN_STATUS 0x6B
-#define SCAN_TEST_PROTOCOL_VERSION 2
+//   Stray reading log (request 4): [2..3] number of the first entry wanted
+//     (LE16; entries are numbered from 0 in the order they happened). Reply:
+//     [1..2] entries logged so far (LE16, wraps)  [3] number of the first
+//     entry that follows (low byte)  [4] how many follow (up to 3), then for
+//     each, 19 bytes: [0..3] cycle counter when the column's results arrived
+//     (LE32, F_CPU per second)  [4..7] cycle counter at the last USB start of
+//     frame (LE32; 0 while those are not being timestamped)  [8..10] SysTick
+//     counter when the entry was written (LE24, counts down through each
+//     millisecond)  [11] how long after the results arrived that was, in
+//     pairs of cycles (255 = more)  [12] 0  [13] key  [14] kind: 1 = the two
+//     readings disagreed, 2 = they agreed but jumped, 0 = an ordinary
+//     reading, logged once in SCAN_STRAY_CONTROL for comparison  [15..16],
+//     [17..18] first and second reading minus the key's last reading (LE
+//     int16). The log keeps the last 64 entries; an entry older than that is
+//     skipped to the oldest one kept.
+//   USB frame timestamps (request 7): [2] 1 = on, 0 = off. While on, the USB
+//     start-of-frame interrupt is enabled (8,000 a second at high speed) and
+//     the cycle counter is noted at each. Replies like the status request.
+//   Pin activity (request 5): [2] port (0 = A ... 4 = E). Watches the port's
+//     input levels for SCAN_PIN_WATCH_MS and replies [1] port  [2..3] samples
+//     taken / 256 (LE16)  [4 + 2p ..] level changes seen on pin p (LE16,
+//     stops at 65535)  [36 + p] share of samples pin p was high (0-255)
+//     [52..53] levels at the end. The keyboard does nothing else meanwhile.
+//   Pin override (request 6): [2] port  [3] pin  [4] 0 = as the stock
+//     firmware leaves it, 1 = analog, 2 = input, 3 = input with pull-up,
+//     4 = input with pull-down. Only for the unused pins next to the sensor
+//     lines (PA4, PA5, PA6, PC4, PC5, PB0), never as an output, and not
+//     saved. Replies [1] port  [2] pin  [3] the pin's mode bits  [4] its pull
+//     bits; refused for any other pin.
+#define SCAN_TEST_PROTOCOL_VERSION 3
 #define SCAN_RESULT_KEYS 10u
+#define SCAN_STRAY_LOG 64u
+#define SCAN_STRAY_REPLY 3u
+#define SCAN_STRAY_ENTRY 19u
+#define SCAN_STRAY_CONTROL 2048u
+#define SCAN_PIN_WATCH_MS 20u
 
 // Starts a probe; false if the arguments are out of range or one is running
 bool analog_probe_start(uint8_t mode, uint16_t ticks, uint8_t sample,
@@ -226,3 +277,6 @@ bool analog_probe_start(uint8_t mode, uint16_t ticks, uint8_t sample,
 // Write the status / results reply into out[1..] (out[0] is the command ID)
 void analog_test_status(uint8_t *out);
 bool analog_test_results(uint8_t first, uint8_t *out);
+void analog_test_strays(uint16_t first, uint8_t *out);
+// Cycle counter at the last USB start of frame; 0 while not timestamped
+extern volatile uint32_t board_sof_cycles;

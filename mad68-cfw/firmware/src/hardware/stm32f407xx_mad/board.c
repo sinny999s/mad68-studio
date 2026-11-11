@@ -263,7 +263,7 @@ __attribute__((used)) const volatile uint32_t board_firmware_build_id =
 // Reported by GET_FIRMWARE_INFO, and embedded in the image as a marker that
 // MAD68 Studio reads from upgrade files to tell which release a file holds.
 #define MAD68_CFW_MAJOR 7
-#define MAD68_CFW_MINOR 4
+#define MAD68_CFW_MINOR 5
 #define MAD68_CFW_PATCH 0
 #define MAD68_STR_(x) #x
 #define MAD68_STR(x) MAD68_STR_(x)
@@ -632,6 +632,94 @@ static bool scan_command(const uint8_t *in, uint8_t *out) {
   return true;
 }
 
+// Pin diagnostics (v7.5, scan.h): which of a port's pins change level, and
+// a pull or analog mode for the unused pins next to the sensor lines.
+static GPIO_TypeDef *const diag_ports[] = {GPIOA, GPIOB, GPIOC, GPIOD, GPIOE};
+
+static bool pin_watch(uint8_t port_index, uint8_t *out) {
+  if (port_index >= M_ARRAY_SIZE(diag_ports))
+    return false;
+  GPIO_TypeDef *const port = diag_ports[port_index];
+  uint16_t changes[16] = {0};
+  uint32_t highs[16] = {0};
+  uint32_t samples = 0, counted = 0;
+  uint32_t last = port->IDR & 0xFFFFu;
+  const uint32_t start = HAL_GetTick();
+  while (HAL_GetTick() - start < SCAN_PIN_WATCH_MS) {
+    for (uint32_t i = 0; i < 256; i++) {
+      const uint32_t level = port->IDR & 0xFFFFu;
+      uint32_t changed = level ^ last;
+      last = level;
+      while (changed) {
+        const uint32_t pin = (uint32_t)__builtin_ctz(changed);
+        changed &= changed - 1u;
+        if (changes[pin] != 0xFFFFu)
+          changes[pin]++;
+      }
+    }
+    samples += 256;
+    counted++;
+    for (uint32_t pin = 0; pin < 16; pin++)
+      highs[pin] += (last >> pin) & 1u;
+  }
+  memset(out + 1, 0, 63);
+  out[1] = port_index;
+  out[2] = (uint8_t)(samples >> 8);
+  out[3] = (uint8_t)(samples >> 16);
+  for (uint32_t pin = 0; pin < 16; pin++) {
+    out[4 + 2 * pin] = (uint8_t)changes[pin];
+    out[5 + 2 * pin] = (uint8_t)(changes[pin] >> 8);
+    out[36 + pin] = (uint8_t)(highs[pin] * 255u / (counted ? counted : 1u));
+  }
+  out[52] = (uint8_t)last;
+  out[53] = (uint8_t)(last >> 8);
+  return true;
+}
+
+static bool pin_override(uint8_t port_index, uint8_t pin, uint8_t mode,
+                         uint8_t *out) {
+  // Unused by this firmware and by the keys; the stock firmware leaves
+  // PA4-PA6 on an alternate function and PC4, PC5, PB0 as inputs with pull-up
+  static const uint8_t allowed[][2] = {{0, 4}, {0, 5}, {0, 6},
+                                       {2, 4}, {2, 5}, {1, 0}};
+  bool ok = false;
+  for (uint32_t i = 0; i < M_ARRAY_SIZE(allowed); i++)
+    ok |= allowed[i][0] == port_index && allowed[i][1] == pin;
+  if (!ok || mode > 4)
+    return false;
+  uint32_t moder, pupdr;
+  if (mode == 0) {
+    const gpio_state_t *stock = &stock_gpio[port_index];
+    moder = (stock->moder >> (2u * pin)) & 3u;
+    pupdr = (stock->pupdr >> (2u * pin)) & 3u;
+  } else {
+    moder = mode == 1 ? 3u : 0u;                   // analog, or input
+    pupdr = mode == 3 ? 1u : (mode == 4 ? 2u : 0u); // pull-up, pull-down, none
+  }
+  GPIO_TypeDef *const port = diag_ports[port_index];
+  __disable_irq();
+  port->PUPDR = (port->PUPDR & ~(3u << (2u * pin))) | (pupdr << (2u * pin));
+  port->MODER = (port->MODER & ~(3u << (2u * pin))) | (moder << (2u * pin));
+  __enable_irq();
+  memset(out + 1, 0, 63);
+  out[1] = port_index;
+  out[2] = pin;
+  out[3] = (uint8_t)((port->MODER >> (2u * pin)) & 3u);
+  out[4] = (uint8_t)((port->PUPDR >> (2u * pin)) & 3u);
+  return true;
+}
+
+// USB start-of-frame timestamps for the stray reading log (scan.h)
+volatile uint32_t board_sof_cycles = 0;
+static volatile bool sof_watch = false;
+
+static void sof_watch_set(bool on) {
+  sof_watch = on;
+  tud_sof_cb_enable(on);
+  if (!on)
+    board_sof_cycles = 0;
+}
+
 // SCAN_PROBE / SCAN_STATUS (v7.4 timing test), layouts in scan.h
 static bool lag_measuring = false;
 
@@ -655,6 +743,17 @@ static bool scan_test_command(const uint8_t *in, uint8_t *out) {
     lag_measuring = in[1] == 2;
     matrix_lag_measure(lag_measuring);
     reset = true;
+  } else if (in[1] == 4) {
+    analog_test_strays((uint16_t)(in[2] | in[3] << 8), out);
+    return true;
+  } else if (in[1] == 5) {
+    return pin_watch(in[2], out);
+  } else if (in[1] == 6) {
+    return pin_override(in[2], in[3], in[4], out);
+  } else if (in[1] == 7) {
+    if (in[2] > 1)
+      return false;
+    sof_watch_set(in[2] == 1);
   } else if (in[1] != 0) {
     return false;
   }
@@ -890,4 +989,10 @@ uint32_t board_cycle_count(void) { return DWT->CYCCNT; }
 // Interrupt Handlers
 //--------------------------------------------------------------------+
 
-void OTG_HS_IRQHandler(void) { tud_int_handler(1); }
+void OTG_HS_IRQHandler(void) {
+  // Only while the start-of-frame interrupt is enabled is its flag cleared
+  // every time, so only then does it mean "a frame has just started"
+  if (sof_watch && (USB_OTG_HS->GINTSTS & USB_OTG_GINTSTS_SOF))
+    board_sof_cycles = DWT->CYCCNT;
+  tud_int_handler(1);
+}

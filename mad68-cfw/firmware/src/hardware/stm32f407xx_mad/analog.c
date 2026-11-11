@@ -90,6 +90,21 @@ _Static_assert(sizeof(par_rows1) >= sizeof(par_rows2) &&
                "ADC1 finishes last: its DMA interrupt ends the column");
 _Static_assert(NUM_ROWS <= 6, "a sequence must fit SQR3");
 
+// Paired read: ADC2 converts one row twice, ADC1 and ADC3 the others
+static const uint8_t pair_rows1[] = ADC_PAIRED_ADC1_ROWS;
+static const uint8_t pair_rows2[2] = {ADC_PAIRED_ROW, ADC_PAIRED_ROW};
+static const uint8_t pair_rows3[] = ADC_PAIRED_ADC3_ROWS;
+#define PAIR_N1 ((uint32_t)sizeof(pair_rows1))
+#define PAIR_N3 ((uint32_t)sizeof(pair_rows3))
+// Result slots of the paired row's two readings: after ADC1's and ADC3's
+#define PAIR_A (NUM_ROWS - 1u)
+#define PAIR_B NUM_ROWS
+
+_Static_assert(sizeof(pair_rows1) + sizeof(pair_rows3) + 1 == NUM_ROWS,
+               "ADC1 and ADC3 convert every row but the paired one");
+_Static_assert(sizeof(pair_rows1) >= 2 && sizeof(pair_rows1) >= sizeof(pair_rows3),
+               "ADC1 finishes last: its DMA interrupt ends the column");
+
 #if !defined(ADC_NUM_SAMPLE_CYCLES)
 #define ADC_NUM_SAMPLE_CYCLES ADC_SAMPLETIME_28CYCLES
 #endif
@@ -160,14 +175,18 @@ typedef struct {
 static ADC_HandleTypeDef adc_handle;
 
 // Results of one column. One ADC (layout 0): the five rows in order. Three
-// ADCs (layout 1): ADC1's rows, then ADC2's, then ADC3's. slot_row maps a slot
-// to its row, and slot_key to the key index + 1 it holds in each column (0: no
-// switch).
+// ADCs (layout 1): ADC1's rows, then ADC2's, then ADC3's. Paired (layout 2):
+// ADC1's rows, then ADC3's, then the paired row's two readings, the second of
+// them in one slot more than there are rows. slot_row maps a slot to its row,
+// and slot_key to the key index + 1 it holds in each column (0: no switch).
 #define LAYOUT_SINGLE 0u
 #define LAYOUT_PARALLEL 1u
-__attribute__((aligned(8))) static volatile uint16_t adc_buffer[NUM_ROWS];
-static uint8_t slot_row[2][NUM_ROWS];
-static uint8_t slot_key[2][NUM_COLS][NUM_ROWS];
+#define LAYOUT_PAIRED 2u
+#define LAYOUTS 3u
+#define NUM_SLOTS (NUM_ROWS + 1u)
+__attribute__((aligned(8))) static volatile uint16_t adc_buffer[NUM_SLOTS];
+static uint8_t slot_row[LAYOUTS][NUM_ROWS];
+static uint8_t slot_key[LAYOUTS][NUM_COLS][NUM_ROWS];
 static volatile uint16_t adc_raw[NUM_KEYS];
 
 static volatile uint32_t baseline_acc[NUM_KEYS];
@@ -233,6 +252,22 @@ static volatile uint8_t probe_shift_key = 0;
 static uint32_t probe_sum[NUM_KEYS];
 static uint16_t probe_min[NUM_KEYS];
 static uint16_t probe_max[NUM_KEYS];
+
+// Stray reading log (scan.h): the last SCAN_STRAY_LOG paired readings that
+// disagreed or jumped
+typedef struct {
+  uint32_t cycles;
+  uint32_t sof;
+  uint32_t systick;
+  int16_t first, second;
+  uint8_t late;
+  uint8_t key;
+  uint8_t kind;
+} stray_t;
+static stray_t stray_log[SCAN_STRAY_LOG];
+static volatile uint32_t stray_count = 0;  // entries logged
+static volatile uint32_t pair_strays = 0;  // of which the two disagreed
+static uint32_t pair_control = 0;          // paired readings since a control entry
 
 // Since power-up
 static volatile uint16_t scan_faults = 0;
@@ -393,17 +428,29 @@ static void scan_arm(void) {
   const uint32_t sample = now.sample;
   TIM10->ARR = (uint32_t)now.ticks - 1u;
   if (now.mode & SCAN_MODE_PARALLEL) {
-    adc_sequence(ADC1, par_rows1, PAR_N1, sample);
-    adc_sequence(ADC2, par_rows2, PAR_N2, sample);
-    adc_sequence(ADC3, par_rows3, PAR_N3, sample);
     // ADC2 and ADC3 deliver ahead of ADC1 when their results are due at the
     // same time, and raise no interrupts of their own.
-    dma_stream_arm(DMA2_Stream1, DMA_CHANNEL_2 | DMA_SxCR_PL, DMA_S1_FLAGS,
-                   ADC3, &adc_buffer[PAR_N1 + PAR_N2], PAR_N3);
-    dma_stream_arm(DMA2_Stream2, DMA_CHANNEL_1 | DMA_SxCR_PL, DMA_S2_FLAGS,
-                   ADC2, &adc_buffer[PAR_N1], PAR_N2);
-    dma_stream_arm(DMA2_Stream0, DMA_ADC1_CR, DMA_S0_FLAGS, ADC1, adc_buffer,
-                   PAR_N1);
+    if (now.mode & SCAN_MODE_PAIRED) {
+      adc_sequence(ADC1, pair_rows1, PAIR_N1, sample);
+      adc_sequence(ADC2, pair_rows2, 2, sample);
+      adc_sequence(ADC3, pair_rows3, PAIR_N3, sample);
+      dma_stream_arm(DMA2_Stream1, DMA_CHANNEL_2 | DMA_SxCR_PL, DMA_S1_FLAGS,
+                     ADC3, &adc_buffer[PAIR_N1], PAIR_N3);
+      dma_stream_arm(DMA2_Stream2, DMA_CHANNEL_1 | DMA_SxCR_PL, DMA_S2_FLAGS,
+                     ADC2, &adc_buffer[PAIR_A], 2);
+      dma_stream_arm(DMA2_Stream0, DMA_ADC1_CR, DMA_S0_FLAGS, ADC1,
+                     adc_buffer, PAIR_N1);
+    } else {
+      adc_sequence(ADC1, par_rows1, PAR_N1, sample);
+      adc_sequence(ADC2, par_rows2, PAR_N2, sample);
+      adc_sequence(ADC3, par_rows3, PAR_N3, sample);
+      dma_stream_arm(DMA2_Stream1, DMA_CHANNEL_2 | DMA_SxCR_PL, DMA_S1_FLAGS,
+                     ADC3, &adc_buffer[PAR_N1 + PAR_N2], PAR_N3);
+      dma_stream_arm(DMA2_Stream2, DMA_CHANNEL_1 | DMA_SxCR_PL, DMA_S2_FLAGS,
+                     ADC2, &adc_buffer[PAR_N1], PAR_N2);
+      dma_stream_arm(DMA2_Stream0, DMA_ADC1_CR, DMA_S0_FLAGS, ADC1,
+                     adc_buffer, PAR_N1);
+    }
     // 12-bit, one sequence per start, overrun interrupt, DMA requests that
     // continue after each sequence: what ADC1 runs with
     ADC2->CR1 = ADC_CR1_SCAN | ADC_CR1_OVRIE;
@@ -577,7 +624,13 @@ void analog_init(void) {
     slot_row[LAYOUT_PARALLEL][slot++] = par_rows2[i];
   for (uint32_t i = 0; i < PAR_N3; i++)
     slot_row[LAYOUT_PARALLEL][slot++] = par_rows3[i];
-  for (uint32_t m = 0; m < 2u; m++)
+  slot = 0;
+  for (uint32_t i = 0; i < PAIR_N1; i++)
+    slot_row[LAYOUT_PAIRED][slot++] = pair_rows1[i];
+  for (uint32_t i = 0; i < PAIR_N3; i++)
+    slot_row[LAYOUT_PAIRED][slot++] = pair_rows3[i];
+  slot_row[LAYOUT_PAIRED][slot] = ADC_PAIRED_ROW; // PAIR_A; PAIR_B repeats it
+  for (uint32_t m = 0; m < LAYOUTS; m++)
     for (uint32_t c = 0; c < NUM_COLS; c++)
       for (uint32_t i = 0; i < NUM_ROWS; i++)
         slot_key[m][c][i] = key_map[slot_row[m][i]][c];
@@ -857,6 +910,9 @@ bool analog_probe_start(uint8_t mode, uint16_t ticks, uint8_t sample,
   if (mode >= SCAN_MODE_COUNT || sample > 7u || ticks < SCAN_TICKS_MIN ||
       log2_scans < SCAN_PROBE_LOG2_MIN || log2_scans > SCAN_PROBE_LOG2_MAX)
     return false;
+  // The paired read is a three-ADC read
+  if ((mode & SCAN_MODE_PAIRED) && !(mode & SCAN_MODE_PARALLEL))
+    return false;
   if (probe_phase != PROBE_IDLE)
     return false;
   const scan_timing_t timing = {mode, sample, ticks};
@@ -911,6 +967,47 @@ void analog_test_status(uint8_t *out) {
   out[37] = scan_speed;
   out[38] = speed_state;
   out[39] = filter_level;
+  const uint32_t strays = pair_strays;
+  put16(out + 49, strays);
+  put16(out + 51, strays >> 16);
+}
+
+_Static_assert(5 + SCAN_STRAY_ENTRY * SCAN_STRAY_REPLY <= 64,
+               "stray log reply fits");
+
+void analog_test_strays(uint16_t first, uint8_t *out) {
+  memset(out + 1, 0, 63);
+  __disable_irq();
+  const uint32_t total = stray_count;
+  // The entry asked for, as a full count: the one with those low 16 bits
+  // nearest below the total; older than the log keeps, the oldest one kept
+  uint32_t from = (total & ~0xFFFFu) | first;
+  if (from > total)
+    from -= 0x10000u;
+  if (total - from > SCAN_STRAY_LOG)
+    from = total - SCAN_STRAY_LOG;
+  uint32_t n = total - from;
+  if (n > SCAN_STRAY_REPLY)
+    n = SCAN_STRAY_REPLY;
+  put16(out + 1, total);
+  out[3] = (uint8_t)from;
+  out[4] = (uint8_t)n;
+  for (uint32_t i = 0; i < n; i++) {
+    const stray_t *e = &stray_log[(from + i) % SCAN_STRAY_LOG];
+    uint8_t *p = out + 5 + SCAN_STRAY_ENTRY * i;
+    put16(p, e->cycles);
+    put16(p + 2, e->cycles >> 16);
+    put16(p + 4, e->sof);
+    put16(p + 6, e->sof >> 16);
+    put16(p + 8, e->systick);
+    p[10] = (uint8_t)(e->systick >> 16);
+    p[11] = e->late;
+    p[13] = e->key;
+    p[14] = e->kind;
+    put16(p + 15, (uint16_t)e->first);
+    put16(p + 17, (uint16_t)e->second);
+  }
+  __enable_irq();
 }
 
 bool analog_test_results(uint8_t first, uint8_t *out) {
@@ -1090,6 +1187,87 @@ column_results(const uint8_t *keys, const volatile uint16_t *results) {
   return false;
 }
 
+// `arrived`: the cycle counter when the column's results arrived
+static void stray_put(uint32_t key, uint8_t kind, int32_t first, int32_t second,
+                      uint32_t arrived) {
+  stray_t *e = &stray_log[stray_count % SCAN_STRAY_LOG];
+  // The SysTick counter is read here, a known number of cycles later
+  const uint32_t systick = SysTick->VAL;
+  const uint32_t late = (DWT->CYCCNT - arrived) >> 1;
+  e->cycles = arrived;
+  e->systick = systick;
+  e->late = (uint8_t)(late > 255u ? 255u : late);
+  e->sof = board_sof_cycles;
+  e->first = (int16_t)first;
+  e->second = (int16_t)second;
+  e->key = (uint8_t)key;
+  e->kind = kind;
+  stray_count++;
+}
+
+// The reading to use for a key whose row was converted twice: the average
+// when the two agree; otherwise one of them is a stray reading, and the one
+// nearer the key's last reading is kept.
+static inline __attribute__((always_inline)) uint16_t
+pair_reading(uint32_t key, uint32_t a, uint32_t b, uint32_t arrived) {
+  const int32_t last = adc_raw[key];
+  const int32_t da = (int32_t)a - last, db = (int32_t)b - last;
+  const int32_t apart = da > db ? da - db : db - da;
+  if (apart <= SCAN_PAIR_AGREE) {
+    const int32_t moved = (da + db) / 2;
+    if (moved > SCAN_PAIR_JUMP || moved < -SCAN_PAIR_JUMP) {
+      stray_put(key, 2, da, db, arrived);
+    } else if (++pair_control >= SCAN_STRAY_CONTROL) {
+      pair_control = 0;
+      stray_put(key, 0, da, db, arrived);
+    }
+    return (uint16_t)((a + b + 1u) >> 1);
+  }
+  pair_strays++;
+  stray_put(key, 1, da, db, arrived);
+  return (uint16_t)((da < 0 ? -da : da) <= (db < 0 ? -db : db) ? a : b);
+}
+
+// Paired read: settle the paired row's two readings into one, then store the
+// column like any other. `early`: power the next column first.
+static __attribute__((noinline)) void column_done_paired(bool early) {
+  const uint32_t arrived = DWT->CYCCNT;
+  const uint8_t col = current_col;
+  const uint8_t *keys = slot_key[LAYOUT_PAIRED][col];
+  // The results are complete (their DMA transfers have ended); take them as
+  // whole words, which is quicker than six halfwords
+  uint16_t results[NUM_SLOTS];
+  memcpy(results, (const void *)adc_buffer, sizeof(results));
+
+  const uint8_t next = col + 1u == NUM_COLS ? 0u : (uint8_t)(col + 1u);
+  if (early) {
+    column_deselect(col);
+    column_select(next);
+    start_settle_timer();
+  }
+
+  if (keys[PAIR_A] != 0)
+    results[PAIR_A] = pair_reading(keys[PAIR_A] - 1u, results[PAIR_A],
+                                   results[PAIR_B], arrived);
+  const bool stored = column_results(keys, results);
+
+  if (!early)
+    column_deselect(col);
+  current_col = next;
+  column_count++;
+  const bool rearmed = next == 0 && full_scan_done();
+  if (!early) {
+    column_select(next);
+    start_settle_timer();
+  } else if (rearmed) {
+    // A probe that ended here has halted the scan with the next column
+    // powered
+    start_settle_timer();
+  }
+  if (stored)
+    analog_col_seq[col]++;
+}
+
 // Store the results, then switch to the next column (as v7.3 does)
 static inline __attribute__((always_inline)) void
 column_done_late(const uint8_t (*keys)[NUM_ROWS]) {
@@ -1117,9 +1295,10 @@ column_done_late(const uint8_t (*keys)[NUM_ROWS]) {
 static inline __attribute__((always_inline)) void
 column_done_early(const uint8_t (*keys)[NUM_ROWS]) {
   const uint8_t col = current_col;
-  uint16_t results[NUM_ROWS];
-  for (uint32_t s = 0; s < NUM_ROWS; s++)
-    results[s] = adc_buffer[s];
+  // The results are complete (their DMA transfers have ended); take them as
+  // whole words, which is quicker than five halfwords
+  uint16_t results[NUM_SLOTS];
+  memcpy(results, (const void *)adc_buffer, sizeof(results));
 
   column_deselect(col);
   const uint8_t next = col + 1u == NUM_COLS ? 0u : (uint8_t)(col + 1u);
@@ -1150,6 +1329,10 @@ static __attribute__((noinline)) void column_done_other(uint32_t mode,
       scan_fault();
       return;
     }
+  }
+  if (mode & SCAN_MODE_PAIRED) {
+    column_done_paired((mode & SCAN_MODE_EARLY) != 0);
+    return;
   }
   const uint8_t (*keys)[NUM_ROWS] =
       slot_key[mode & SCAN_MODE_PARALLEL ? LAYOUT_PARALLEL : LAYOUT_SINGLE];

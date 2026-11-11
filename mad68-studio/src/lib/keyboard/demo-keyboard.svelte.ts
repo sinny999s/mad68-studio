@@ -33,6 +33,7 @@ import {
   type ScanSpeedInfo,
 } from "$lib/libhmk/commands/scan-speed"
 import { HMK_GamepadButton, type HMK_GamepadOptions } from "$lib/libhmk/gamepad"
+import { Keycode } from "$lib/libhmk/keycodes"
 import { defaultMacroNode, type HMK_MacroNode } from "$lib/libhmk/macro"
 import { hsvToRgb } from "$lib/lighting/color"
 import type {
@@ -66,6 +67,11 @@ const {
   numMacroNodes,
   defaultKeymaps,
 } = demoMetadata
+
+// The keys as the demo starts out, to find Space and Left Ctrl
+const baseLayer = defaultKeymaps[0][0]
+// A stray reading of a resting key: 0.11 to 0.35 mm on the 0-255 scale
+const STRAY_DISTANCE = [7, 22]
 
 type DemoKeyboardProfileState = {
   keymap: number[][]
@@ -195,14 +201,14 @@ export class DemoKeyboard implements Keyboard {
   }
   async getFirmwareInfo(): Promise<FirmwareInfo> {
     // The demo plays the firmware this app bundles
-    return { major: 7, minor: 4, patch: 0, buildId: 0 }
+    return { major: 7, minor: 5, patch: 0, buildId: 0 }
   }
 
   #scanSpeed = 1
   #scanSmoothing = 0
   async getScanSpeed(): Promise<ScanSpeedInfo> {
     const settleUs = [40, 28, 18, 8, 8, 5, 5]
-    const modes = [0, 0, 0, 0, 3, 3, 3]
+    const modes = [0, 0, 0, 0, 7, 7, 7]
     const samples = [2, 2, 2, 2, 2, 2, 1]
     const i = this.#scanSpeed
     // The demo shows what the firmware's own measurements would roughly say
@@ -240,14 +246,48 @@ export class DemoKeyboard implements Keyboard {
   async factoryReset() {}
   async recalibrate() {}
   // Simulated typing so the demo's live key travel has something to show:
-  // keys go down and come back up in a rolling pattern.
+  // keys go down and come back up in a rolling pattern. The rest check
+  // switches it off while it measures.
+  #typing = true
+  setSimulatedTyping(on: boolean) {
+    this.#typing = on
+  }
+
+  // Stray sensor readings, as on the bottom row of a real board: every few
+  // seconds Space and Left Ctrl read 0.1 to 0.35 mm for a single reading.
+  // Every other key rests at exactly 0. `every` is the wait between two of
+  // them in seconds, `next` the time of the next one.
+  #strays = [
+    { key: baseLayer.indexOf(Keycode.KC_SPACE), every: [3, 8], next: 0 },
+    { key: baseLayer.indexOf(Keycode.KC_LEFT_CTRL), every: [6, 14], next: 0 },
+  ]
+  #strayReadings(t: number) {
+    const readings: Record<number, number> = {}
+    for (const stray of this.#strays) {
+      if (t < stray.next) continue
+      // The first reading of all only starts the clock
+      if (stray.next > 0) {
+        const [min, max] = STRAY_DISTANCE
+        readings[stray.key] = min + Math.floor(Math.random() * (max - min + 1))
+      }
+      const [min, max] = stray.every
+      stray.next = t + min + Math.random() * (max - min)
+    }
+    return readings
+  }
+
   async analogInfo() {
     const t = performance.now() / 1000
+    const strays = this.#strayReadings(t)
     return Array.from({ length: numKeys }, (_, i) => {
       const phase = (t * 0.9 + i * 0.618) % 3.2
-      const press = phase < 0.7 ? Math.sin((phase / 0.7) * Math.PI) : 0
-      const distance = Math.round(press * 255)
-      return { adcValue: 2300 - Math.round(press * 760), distance }
+      const press =
+        this.#typing && phase < 0.7 ? Math.sin((phase / 0.7) * Math.PI) : 0
+      const distance = Math.max(Math.round(press * 255), strays[i] ?? 0)
+      return {
+        adcValue: 2300 - Math.round((distance / 255) * 760),
+        distance,
+      }
     })
   }
   async getCalibration() {

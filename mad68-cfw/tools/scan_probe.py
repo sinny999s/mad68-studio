@@ -12,6 +12,8 @@ A timing is a mode, a settle time and an ADC sample time:
   mode 2  one ADC, next column powered first
   mode 1  three ADCs at once, results stored first
   mode 3  three ADCs at once, next column powered first
+  mode 5  three ADCs at once, the bottom row read twice (v7.5)
+  mode 7  the same, next column powered first (v7.5: Turbo, Extreme, Max)
 
 What it does (close MAD68 Studio first; it uses the same config interface):
 
@@ -54,7 +56,7 @@ ERRORS = {0: '', 1: 'ADC2/ADC3 did not answer', 2: 'faults (overrun, DMA error o
           3: 'scan stopped', 4: 'readings moved too far to go live', 5: 'replaced by a scan speed change'}
 F_TUNED, F_ADC23, F_FELL_BACK, F_CAPTURING = 1, 2, 4, 8
 SAMPLE_CYCLES = [3, 15, 28, 56, 84, 112, 144, 480]
-MODE = {0: '1 ADC ', 1: '3 ADCs', 2: '1 ADC+', 3: '3 ADCs+'}
+MODE = {0: '1 ADC ', 1: '3 ADCs', 2: '1 ADC+', 3: '3 ADCs+', 5: '3 ADCs2', 7: '3 ADCs2+'}
 SENSORS = 75          # matrix positions read per scan (15 columns x 5 rows): the "total" marketing number
 HELD = 200            # distance (0-255) that counts as held all the way down
 REF = (0, 40, 2)      # the reference timing: v7.2's, with the longest settle
@@ -72,7 +74,7 @@ TIMINGS = (
 
 def name(t):
     mode, us, sample = t
-    return f'{MODE[mode]:7} {us:>4g} us {SAMPLE_CYCLES[sample]:>2}cyc'
+    return f'{MODE[mode]:8} {us:>4g} us {SAMPLE_CYCLES[sample]:>2}cyc'
 
 
 def parse_status(r):
