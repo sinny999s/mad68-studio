@@ -36,7 +36,7 @@ CMD_SET_SCAN = 0x69
 CMD_SET_SCAN_FILTER = 0x6C
 CMD_SCAN_STATUS = 0x6B
 IN_EFFECT, SWITCHING, REFUSED = 0, 1, 2
-SPEEDS = ['Relaxed', 'Standard', 'Fast', 'Fastest', 'Turbo', 'Extreme', 'Max']
+SPEEDS = ['Relaxed', 'Standard', 'Quick', 'Rapid', 'Turbo', 'Extreme', 'Max']   # as MAD68 Studio 0.11.1 names them
 LEVELS = ['Classic', 'Smooth', 'Balanced', 'Fast']
 SENSORS = 75
 
@@ -163,7 +163,7 @@ def main():
     if start is None or start['protocol'] < 2:
         raise SystemExit('This needs custom firmware v7.4 or newer.')
     prof, act = kb.actuation_points()
-    state_txt = {IN_EFFECT: '', SWITCHING: ' (switching)', REFUSED: ' (NOT in effect: running Fastest instead)'}
+    state_txt = {IN_EFFECT: '', SWITCHING: ' (switching)', REFUSED: ' (NOT in effect: running Rapid instead)'}
     print(f"Now: {SPEEDS[start['speed']]}{state_txt[start['state']]}, smoothing {LEVELS[start['level']]}, "
           f"{start['rate']} scans/s, main loop {start['loops']}/s")
     print(f'Profile {prof + 1}, actuation points {mm(min(act)):.2f}-{mm(max(act)):.2f} mm')
@@ -184,7 +184,7 @@ def main():
             g = set_speed(kb, sp)
             if g['state'] != IN_EFFECT:
                 refused.add(sp)
-                print(f"{SPEEDS[sp]:8} NOT in effect on this keyboard (it runs Fastest instead); skipped")
+                print(f"{SPEEDS[sp]:8} NOT in effect on this keyboard (it runs Rapid instead); skipped")
                 report['rest'].append({'speed': sp, 'refused': True})
                 continue
             for level in range(4):

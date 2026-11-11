@@ -28,7 +28,8 @@ export const SCAN_SPEED_REFUSED = 2
 
 export type ScanSpeedInfo = {
   version: number
-  /** Index into settleUs: 0 Relaxed ... 3 Fastest, 4 Turbo, 5 Extreme, 6 Max */
+  /** Index into settleUs: 0 Relaxed, 1 Standard, 2 Quick, 3 Rapid, 4 Turbo,
+   * 5 Extreme, 6 Max (2 and 3 were Fast and Fastest up to Studio 0.11.0) */
   speed: number
   /** Full-keyboard scans per second measured on the keyboard; 0 = measuring */
   scanRate: number

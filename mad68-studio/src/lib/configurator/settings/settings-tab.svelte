@@ -60,37 +60,38 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   const optionsQuery = optionsQueryContext.get()
   const { current: options } = $derived(optionsQuery.options)
 
-  // Key scan speed (custom firmware v7.3; the last three from v7.4). The
-  // keyboard measures its own scan rate, so keep asking while this page is
-  // open. `settle`, `mode` and `sample` are what the firmware uses, for when
-  // it is too old to say.
+  // Key scan speed (custom firmware v7.3; the last three from v7.4), slowest
+  // first. The keyboard measures its own scan rate, so keep asking while this
+  // page is open. `settle`, `mode` and `sample` are what the firmware uses,
+  // for when it is too old to say. Speeds 2 and 3 were called Fast and Fastest
+  // up to Studio 0.11.0.
   const scanSpeeds = [
     {
       title: "Relaxed",
-      description: "The timing of custom firmware v7.2.",
+      description:
+        "Gives each column the most time. Slower than MadLions' own firmware.",
       settle: 40,
       mode: 0,
       sample: 2,
     },
     {
       title: "Standard",
-      description:
-        "About as fast as MadLions' own firmware. Recommended, and the default.",
+      description: "About as fast as MadLions' own firmware. The default.",
       settle: 28,
       mode: 0,
       sample: 2,
     },
     {
-      title: "Fast",
-      description: "Faster than MadLions' own firmware.",
+      title: "Quick",
+      description: "About 1.3 times as fast as MadLions' own firmware.",
       settle: 18,
       mode: 0,
       sample: 2,
     },
     {
-      title: "Fastest",
+      title: "Rapid",
       description:
-        "About twice as fast as MadLions' own firmware, and the fastest that reads the sensors one row at a time.",
+        "About twice as fast as MadLions' own firmware. The quickest that reads one row at a time.",
       settle: 8,
       mode: 0,
       sample: 2,
@@ -98,7 +99,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     {
       title: "Turbo",
       description:
-        "Reads three rows of sensors at once, with the same sensor timing as Fastest. Nearly three times as fast as MadLions' own firmware.",
+        "Rapid's timing on three rows at once. About 2.8 times as fast as MadLions' own firmware.",
       settle: 8,
       mode: 3,
       sample: 2,
@@ -106,7 +107,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     {
       title: "Extreme",
       description:
-        "Three rows at once and a shorter wait. About three and a half times as fast as MadLions' own firmware.",
+        "A shorter wait per column. About 3.6 times as fast as MadLions' own firmware.",
       settle: 5,
       mode: 3,
       sample: 2,
@@ -114,12 +115,17 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     {
       title: "Max",
       description:
-        "Like Extreme, with shorter sensor sampling. About four times as fast as MadLions' own firmware.",
+        "Shorter sensor sampling as well. About 4 times as fast as MadLions' own firmware.",
       settle: 5,
       mode: 3,
       sample: 1,
     },
   ]
+  // Where each group of speeds starts in the list
+  const scanSpeedGroups: Record<number, string> = {
+    0: "One row of sensors at a time",
+    4: "Three rows at once",
+  }
   // Smoothing of the key readings (custom firmware v7.4)
   const smoothingLevels = [
     {
@@ -224,12 +230,10 @@ this program. If not, see <https://www.gnu.org/licenses/>.
           <div class="grid gap-1">
             <span class="text-sm font-bold">Key Scan Speed</span>
             <p class="text-sm text-wrap text-muted-foreground">
-              How often the keyboard reads all of its key sensors. The first
-              four speeds read one row of sensors at a time and differ in how
-              long each column of sensors is given to power up. The last three
-              read three rows at once. Changes apply at once and are saved on
-              the keyboard, which then re-reads every key's resting position, so
-              keep your hands off the keys for a moment.
+              How often the keyboard reads all of its key sensors, slowest
+              first. Changes apply at once and are saved on the keyboard, which
+              then re-reads every key's resting position, so keep your hands off
+              the keys for a moment.
             </p>
             {#if scan}
               <p class="text-sm text-wrap" aria-live="polite">
@@ -251,7 +255,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
                 <p class="text-sm text-wrap text-destructive" role="alert">
                   Your keyboard is not using {scanSpeeds[scan.speed]?.title ??
                     "this speed"}: reading three rows at once did not give the
-                  same key readings on it, so it is running Fastest instead.
+                  same key readings on it, so it is running Rapid instead.
                   Choose another speed, or choose this one again to retry.
                 </p>
               {/if}
@@ -277,6 +281,16 @@ this program. If not, see <https://www.gnu.org/licenses/>.
                 scan?.samples[i] ?? speed.sample,
               )}
               {@const missing = !!scan && i >= scan.settleUs.length}
+              {#if scanSpeedGroups[i]}
+                <p
+                  class={cn(
+                    "text-xs font-semibold tracking-wide text-muted-foreground uppercase",
+                    i > 0 && "mt-2",
+                  )}
+                >
+                  {scanSpeedGroups[i]}
+                </p>
+              {/if}
               <div class="flex items-start gap-3">
                 <RadioGroup.Item
                   class="mt-0.5"
@@ -290,8 +304,8 @@ this program. If not, see <https://www.gnu.org/licenses/>.
                   <Label for="scan-speed-{i}">
                     {speed.title}
                     <span class="font-normal text-muted-foreground">
-                      · {settle} µs wait per column, about {formatRate(rate)} scans
-                      per second ({formatTotal(rate)})
+                      · about {formatTotal(rate)} · {formatRate(rate)} scans a second,
+                      {settle} µs per column
                     </span>
                   </Label>
                   <p class="text-sm text-wrap text-muted-foreground">
@@ -308,8 +322,8 @@ this program. If not, see <https://www.gnu.org/licenses/>.
             Turbo, Extreme and Max were tested on one keyboard: millions of
             scans without a fault, and key readings within 0.3% of the slowest
             speed. The keyboard checks them itself before using them and falls
-            back to Fastest if its readings don't agree. If key depth looks
-            jumpy or keys press by themselves on yours, go back to Standard.
+            back to Rapid if its readings don't agree. If key depth looks jumpy
+            or keys press by themselves on yours, go back to Standard.
           </p>
         </div>
         <div class="grid gap-3">

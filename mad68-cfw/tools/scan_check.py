@@ -50,7 +50,7 @@ CMD_UNKNOWN = 0xFF
 
 NUM_KEYS = 68
 REST = 1024  # ADC_REST_REFERENCE: what the firmware reports for a key at rest
-SPEED_NAMES = ['Relaxed', 'Standard', 'Fast', 'Fastest']
+SPEED_NAMES = ['Relaxed', 'Standard', 'Quick', 'Rapid']     # 2 and 3 were Fast and Fastest up to Studio 0.11.0
 LABELS = ('Esc 1 2 3 4 5 6 7 8 9 0 - = Bksp Ins Tab Q W E R T Y U I O P [ ] \\ Del '
           'Caps A S D F G H J K L ; \' Enter PgUp LShift Z X C V B N M , . / RShift Up PgDn '
           'LCtrl Win LAlt Space RAlt Fn RCtrl Left Down Right').split()

@@ -82,12 +82,13 @@ Plus MAD68-specific pages:
   - One row of sensors at a time, differing in how long each column is given
     to power up: **Relaxed** (40 µs, v7.2's timing, 1,291, 97K), **Standard**
     (28 µs, 1,688, 127K, about MadLions' own 1,667, the default), **Fast**
-    (18 µs, 2,232, 167K) and **Fastest** (8 µs, 3,387, 254K).
+    (18 µs, 2,232, 167K) and **Rapid** (8 µs, 3,387, 254K). Quick and Rapid
+    were called Fast and Fastest up to MAD68 Studio 0.11.0.
   - Three rows at once, on all three of the chip's converters: **Turbo**
     (8 µs, 4,741, 356K), **Extreme** (5 µs, 6,060, 454K) and **Max** (5 µs
     with shorter sampling, 6,852, 514K). On that keyboard they ran millions
     of scans without a fault and read keys within 0.3% of Relaxed. The
-    keyboard checks one of these itself before using it, and runs Fastest
+    keyboard checks one of these itself before using it, and runs Rapid
     instead if its readings don't agree; the page says so.
   - The page shows the scan rate the keyboard measures itself, live. Changing
     the speed applies at once, is saved on the keyboard, and makes the

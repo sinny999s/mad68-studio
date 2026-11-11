@@ -527,6 +527,10 @@ reports version 3.
 
 ## Key scan speed (v7.3)
 
+(Speed names: MAD68 Studio 0.11.1 calls speeds 2 and 3 **Quick** and
+**Rapid**; this README, written earlier, calls them Fast and Fastest. The
+firmware itself only knows the numbers 0-6.)
+
 The Hall sensors are read one column at a time: power the column, wait for the
 sensors to settle, convert the five rows (5 × 40 ADC cycles at 21 MHz =
 9.5 µs), move to the next of the 15 columns.
