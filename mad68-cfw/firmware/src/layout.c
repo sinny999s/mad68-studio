@@ -112,7 +112,50 @@ static uint8_t advanced_key_indices[NUM_LAYERS][NUM_KEYS];
 // Same as `active_keycodes` but for advanced keys
 static uint8_t active_advanced_keys[NUM_KEYS];
 
+// Typing pause (v7.6, see layout.h). RAM only: a power-up always types.
+static bool input_paused;
+static uint32_t input_pause_start;
+static uint32_t input_pause_ms;
+// Keys held when the pause ended: read as released until they are let go
+static bitmap_t key_held_over[] = MAKE_BITMAP(NUM_KEYS);
+static uint8_t num_keys_held_over;
+
 void layout_init(void) { layout_load_advanced_keys(); }
+
+static void layout_end_pause(void) {
+  input_paused = false;
+  num_keys_held_over = 0;
+  for (uint32_t i = 0; i < NUM_KEYS; i++) {
+    const bool held = key_matrix[i].is_pressed;
+    bitmap_set(key_held_over, i, held);
+    num_keys_held_over += held;
+  }
+}
+
+void layout_pause_input(uint32_t ms) {
+  if (ms == 0) {
+    if (input_paused)
+      layout_end_pause();
+    return;
+  }
+  if (!input_paused)
+    // Centre the sticks and let go of the buttons now. The keys held for
+    // typing are released by the next layout_task().
+    xinput_release_all();
+  input_paused = true;
+  input_pause_start = timer_read();
+  input_pause_ms = ms;
+}
+
+bool layout_input_paused(uint32_t *ms_left) {
+  if (ms_left) {
+    const uint32_t gone = timer_elapsed(input_pause_start);
+    *ms_left = input_paused && gone < input_pause_ms ? input_pause_ms - gone : 0;
+  }
+  return input_paused;
+}
+
+uint8_t layout_keys_held_over(void) { return num_keys_held_over; }
 
 void layout_load_advanced_keys(void) {
   advanced_key_init();
@@ -136,10 +179,28 @@ void layout_task(void) {
   static advanced_key_event_t ak_event = {0};
   static uint32_t last_ak_tick = 0;
 
+  if (input_paused && timer_elapsed(input_pause_start) >= input_pause_ms)
+    // Nobody asked to stay paused in time
+    layout_end_pause();
+  if (num_keys_held_over) {
+    // A key held when the pause ended types again once it has been let go
+    uint8_t n = 0;
+    for (uint32_t i = 0; i < NUM_KEYS; i++) {
+      if (!bitmap_get(key_held_over, i))
+        continue;
+      if (key_matrix[i].is_pressed)
+        n++;
+      else
+        bitmap_set(key_held_over, i, false);
+    }
+    num_keys_held_over = n;
+  }
+
   const uint8_t current_layer = layout_get_current_layer();
   bool has_non_tap_hold_press = false;
-  // Controller bindings apply on layer 0 while controller output is on
-  const bool gamepad_keys = (current_layer == 0) &
+  // Controller bindings apply on layer 0 while controller output is on (and
+  // typing is not paused)
+  const bool gamepad_keys = !input_paused & (current_layer == 0) &
                             eeconfig->options.xinput_enabled &
                             xinput_is_active();
 
@@ -150,12 +211,18 @@ void layout_task(void) {
     // (controller bindings aside, which read its travel)
     if (!gamepad_keys & !k->is_pressed & !last_key_press)
       continue;
+    // Silent: every key while typing is paused, and a key held since a pause
+    // ended until it is let go
+    const bool silent =
+        input_paused | ((num_keys_held_over != 0) && bitmap_get(key_held_over, i));
     // Whether the layout sees this key as pressed. A key the controller takes
     // over reads as released instead of being skipped, so a key that was
     // typing when controller output switched on is released, not left held.
-    bool is_pressed = k->is_pressed;
+    // A silent key reads as released too, so a key held when typing pauses is
+    // released properly (layers, advanced keys and all).
+    bool is_pressed = k->is_pressed & !silent;
 
-    if (gamepad_keys) {
+    if (gamepad_keys & !silent) {
       // XInput key only applies to layer 0. We process it first since the
       // subsequent key processing may be skipped due to the gamepad options.
       if (CURRENT_PROFILE.gamepad_buttons[i] != GP_BUTTON_NONE) {

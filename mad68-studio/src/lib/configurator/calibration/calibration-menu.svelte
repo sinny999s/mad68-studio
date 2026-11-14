@@ -25,23 +25,74 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   import { analogInfoQueryContext } from "../queries/analog-info-query.svelte"
   import { calibrationQueryContext } from "../queries/calibration.query.svelte"
   import { optionsQueryContext } from "../queries/options-query.svelte"
+  import { typingPauseContext } from "./typing-pause.svelte"
 
   const keyboard = keyboardContext.get()
   const {
     demo,
     version,
-    metadata: { adcResolution },
+    metadata: { adcResolution, numKeys },
   } = keyboard
 
   const analogInfoQuery = analogInfoQueryContext.get()
   const calibrationQuery = calibrationQueryContext.get()
   const optionsQuery = optionsQueryContext.get()
+  const typingPause = typingPauseContext.get()
   const { current: calibration } = $derived(calibrationQuery.calibration)
   const { current: options } = $derived(optionsQuery.options)
+  const canSave = isFeatureAvailable("saveCalibrationThreshold", version)
+
+  let recalibrating = $state(false)
+
+  async function recalibrate() {
+    recalibrating = true
+    try {
+      // Pause typing first, so the keys pressed next don't type
+      if (typingPause.supported) await typingPause.beginCalibration()
+      await analogInfoQuery.recalibrate()
+      // Readings taken while the keyboard measured its rest values don't count
+      typingPause.pressed.clear()
+    } finally {
+      recalibrating = false
+    }
+  }
+
+  async function saveThreshold() {
+    await keyboard.saveCalibrationThreshold()
+    toast.success("Calibration saved on the keyboard")
+  }
+
+  async function finish() {
+    typingPause.stop()
+    if (canSave && !demo)
+      await saveThreshold().catch(() => {
+        toast.error("Couldn't save the calibration")
+      })
+  }
 </script>
 
 <div class="grid size-full grid-cols-[minmax(0,1fr)_24rem]">
   <FixedScrollArea class="flex flex-col gap-4 p-4">
+    {#if typingPause.calibrating}
+      <div
+        class="flex flex-col gap-2 rounded-md border border-primary/60 bg-primary/10 p-3 text-sm"
+      >
+        <div class="font-bold">Typing paused</div>
+        <p>
+          Press every key all the way down, one at a time. Nothing reaches your
+          PC, so no shortcut or Windows key can go off. Keys light up once they
+          have been pressed all the way.
+        </p>
+        <p class="text-muted-foreground">
+          {typingPause.pressed.size} of {numKeys} keys pressed all the way
+        </p>
+        <div>
+          <Button onclick={finish} size="sm">
+            {canSave && !demo ? "Done (save calibration)" : "Done"}
+          </Button>
+        </div>
+      </div>
+    {/if}
     {#if !isFeatureAvailable("saveCalibrationThreshold", version)}
       <Switch
         bind:checked={
@@ -97,30 +148,59 @@ this program. If not, see <https://www.gnu.org/licenses/>.
       step={10}
       title="Initial Bottom Out Threshold"
     />
-    <div class="flex gap-2">
+    <div class="flex flex-wrap gap-2">
       <Button
-        disabled={demo}
-        onclick={() => analogInfoQuery.recalibrate()}
+        disabled={recalibrating}
+        onclick={recalibrate}
         size="sm"
         variant="destructive"
       >
         Recalibrate
       </Button>
-      {#if isFeatureAvailable("saveCalibrationThreshold", version)}
+      {#if typingPause.supported && !typingPause.calibrating}
         <Button
-          disabled={demo}
-          onclick={async () => {
-            await keyboard.saveCalibrationThreshold()
-            toast.success("Successfully saved calibration threshold.")
-          }}
+          onclick={() =>
+            typingPause.paused ? typingPause.stop() : typingPause.start()}
           size="sm"
+          variant={typingPause.paused ? "default" : "outline"}
         >
+          {typingPause.paused ? "Resume Typing" : "Pause Typing"}
+        </Button>
+      {/if}
+      {#if canSave && !typingPause.calibrating}
+        <Button disabled={demo} onclick={saveThreshold} size="sm">
           Save Current Threshold
         </Button>
       {/if}
     </div>
+    {#if typingPause.paused && !typingPause.calibrating}
+      <p class="text-sm text-muted-foreground">
+        Typing paused: keys don't reach your PC. It comes back when you click
+        Resume Typing, leave this page or switch to another window.
+      </p>
+    {:else if typingPause.endedBecause}
+      <p class="text-sm text-muted-foreground">
+        Typing came back on because {typingPause.endedBecause}.
+      </p>
+    {:else if typingPause.supported === false && !demo}
+      <p class="text-sm text-muted-foreground">
+        To press keys here without typing, install custom firmware v7.6 or newer
+        (Firmware page). Until then, click into an empty Notepad window before
+        pressing every key.
+      </p>
+    {:else if typingPause.supported && !typingPause.calibrating}
+      <p class="text-sm text-muted-foreground">
+        Recalibrate pauses typing until you click Done, so pressing every key
+        can't type or trigger shortcuts.
+      </p>
+    {/if}
   </FixedScrollArea>
   <FixedScrollArea class="flex flex-col gap-4 p-4">
+    {#if typingPause.paused}
+      <p class="text-sm text-muted-foreground">
+        Typing is paused, so the key tester stays empty.
+      </p>
+    {/if}
     <KeyTester.Root>
       <div class="flex flex-col gap-2">
         <div class="text-sm font-bold">Pressed Keys</div>

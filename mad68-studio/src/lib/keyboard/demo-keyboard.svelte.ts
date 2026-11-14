@@ -26,6 +26,10 @@ import {
   XINPUT_BUTTONS,
   type GamepadState,
 } from "$lib/libhmk/commands/gamepad-state"
+import type {
+  InputPauseAction,
+  InputPauseState,
+} from "$lib/libhmk/commands/input-pause"
 import type { Rgb, RgbConfig } from "$lib/libhmk/commands/rgb"
 import {
   estimateScanRate,
@@ -201,7 +205,7 @@ export class DemoKeyboard implements Keyboard {
   }
   async getFirmwareInfo(): Promise<FirmwareInfo> {
     // The demo plays the firmware this app bundles
-    return { major: 7, minor: 5, patch: 0, buildId: 0 }
+    return { major: 7, minor: 6, patch: 0, buildId: 0 }
   }
 
   #scanSpeed = 1
@@ -236,6 +240,18 @@ export class DemoKeyboard implements Keyboard {
   async setScanSmoothing(level: number) {
     this.#scanSmoothing = level
     return this.getScanSpeed()
+  }
+
+  // Typing pause as the firmware keeps it: ends by itself when time runs out
+  #pauseEnds = 0
+  async getInputPause(): Promise<InputPauseState> {
+    const msLeft = Math.max(0, this.#pauseEnds - Date.now())
+    return { version: 1, paused: msLeft > 0, msLeft, keysHeldOver: 0 }
+  }
+  async setInputPause(request: InputPauseAction) {
+    if (request.action === "pause") this.#pauseEnds = Date.now() + request.ms
+    else if (request.action === "resume") this.#pauseEnds = 0
+    return this.getInputPause()
   }
 
   async disconnect() {}

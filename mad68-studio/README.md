@@ -7,7 +7,7 @@ wrapped in Electron, with MAD68-specific additions.
 
 ## Run it
 
-Start `release/MAD68-Studio-0.9.0-portable.exe` (also copied to the Desktop as `MAD68 Studio.exe`). It needs no install.
+Start `release/MAD68-Studio-0.13.0-portable.exe` (also copied to the Desktop as `MAD68 Studio.exe`). It needs no install.
 
 - Windows SmartScreen may warn because the exe is not code-signed. Choose
   **More info, then Run anyway**.
@@ -120,6 +120,19 @@ Plus MAD68-specific pages:
 - **Lights off while the PC sleeps** (custom firmware v7.5, no setting): the
   LEDs go dark when the PC sleeps or shuts down with the port still powered,
   and come back as they were when it wakes.
+- **Typing pause for calibration** (Calibration page, custom firmware v7.6):
+  **Recalibrate** pauses typing, so pressing every key can't type, open the
+  Start menu or set off a shortcut. Each key lights up once it has been
+  pressed all the way, with a count of how many are done; **Done** brings
+  typing back and saves the calibration. **Pause Typing** does the same
+  without recalibrating. The keyboard still reads its keys while paused (the
+  page shows them live), but nothing reaches the PC. Typing comes back when
+  you click Done or Resume Typing, leave the page, or switch to another
+  window, and the keyboard ends the pause by itself 3 seconds after the app
+  stops asking for it (app closed, crash, cable moved), so it can never be
+  left silent. A key held when the pause ends stays silent until it is let
+  go. On older firmware the page suggests pressing the keys in an empty
+  Notepad window instead.
 - **Try Demo** on the start screen opens a MAD68 HE with its real layout and
   default keymap, with simulated typing, so every page can be tried without
   a keyboard.
@@ -150,10 +163,25 @@ Plus MAD68-specific pages:
     HID interface). The keyboard settings pages need the libhmk firmware.
   - Files are checked before anything is erased: IDs, length, trailer checksum,
     stack pointer and entry point.
-  - From the custom firmware the app restarts the keyboard into update mode by
-    itself. From stock, start the update from MadLions' updater first
-    (holding Esc while plugging in does not enter update mode on this
-    keyboard).
+  - The app restarts the keyboard into update mode by itself, from the custom
+    firmware and (from 0.13.0) from MadLions' stock firmware too:
+    - **Stock firmware:** it sends the same request as MadLions' updater, a
+      32-byte report on the stock raw HID interface (usage page `0xFF60`,
+      usage `0x61`), with one byte changed. The updater sends
+      `96 96 96 98`, and in stock v1.06 the third `96` first runs stock's
+      settings reset. The app sends `96 96 00 98`, which only sets the
+      update-mode flag and jumps to the bootloader, so your stock settings
+      stay as they are. Checked on all three stock files (Lightless, RGB,
+      Ultra/Limit) in the emulator: `../mad68-cfw/tools/stock_update_mode.py`,
+      18/18. A mock-WebHID test of the install flow from every stock board
+      passes 36/36. **Tested on 2026-11-14** on a MAD68 HE RGB: Restore
+      stock (v1.06), then Install custom firmware. The request went to
+      `1058 [ff60:61]`, update mode (`2024`) appeared 1.2 s later, and the
+      keyboard came back on the custom firmware (v7.6.0) with no manual step.
+    - If the keyboard hasn't switched after 10 seconds, the app shows the
+      manual ways in: Fn+Ins on the custom firmware, or MadLions' updater on
+      stock (close it once the keyboard stops typing). Holding Esc while
+      plugging in does not enter update mode on this keyboard.
   - It uses the same bootloader protocol as hub.fgg.com.cn: the "DuckBread"
     sector upgrade (`AA 01` start, `AA 02` erase, `AA 03` data, `AA 96`
     finish), described in `../mad68-cfw/README.md`. The packets it generates

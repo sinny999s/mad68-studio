@@ -263,7 +263,7 @@ __attribute__((used)) const volatile uint32_t board_firmware_build_id =
 // Reported by GET_FIRMWARE_INFO, and embedded in the image as a marker that
 // MAD68 Studio reads from upgrade files to tell which release a file holds.
 #define MAD68_CFW_MAJOR 7
-#define MAD68_CFW_MINOR 5
+#define MAD68_CFW_MINOR 6
 #define MAD68_CFW_PATCH 0
 #define MAD68_STR_(x) #x
 #define MAD68_STR(x) MAD68_STR_(x)
@@ -538,6 +538,15 @@ void board_rgb_store(uint32_t type, const uint8_t *payload, uint32_t len) {
 #define BOARD_COMMAND_SET_PROFILE 0x66
 #define BOARD_COMMAND_GET_FIRMWARE_INFO 0x67
 #define GAMEPAD_PROTOCOL_VERSION 3
+// PAUSE_INPUT (0x6D, v7.6): typing pause for calibration (layout.h).
+//   [1] 0 = status only, 1 = pause typing for [2..3] milliseconds (LE16,
+//   1-10000) from now, 2 = end the pause now. The host repeats 1 to stay
+//   paused; the pause ends by itself when the time runs out. Reply: [1]
+//   protocol 1, [2] 1 while paused, [3..4] milliseconds left (LE16), [5] keys
+//   still silent because they were held when a pause ended. Not saved.
+#define BOARD_COMMAND_PAUSE_INPUT 0x6D
+#define PAUSE_INPUT_PROTOCOL_VERSION 1
+#define PAUSE_INPUT_MAX_MS 10000u
 
 static void gamepad_fill_response(uint8_t *out) {
   const xinput_report_t *r = xinput_get_report();
@@ -568,6 +577,27 @@ static bool gamepad_command(const uint8_t *in, uint8_t *out) {
     return false;
   }
   gamepad_fill_response(out);
+  return true;
+}
+
+static bool pause_input_command(const uint8_t *in, uint8_t *out) {
+  if (in[1] == 1) {
+    const uint32_t ms = (uint32_t)in[2] | (uint32_t)in[3] << 8;
+    if (ms == 0 || ms > PAUSE_INPUT_MAX_MS)
+      return false;
+    layout_pause_input(ms);
+  } else if (in[1] == 2) {
+    layout_pause_input(0);
+  } else if (in[1] != 0) {
+    return false;
+  }
+  uint32_t left;
+  const bool paused = layout_input_paused(&left);
+  out[1] = PAUSE_INPUT_PROTOCOL_VERSION;
+  out[2] = paused ? 1u : 0u;
+  out[3] = (uint8_t)left;
+  out[4] = (uint8_t)(left >> 8);
+  out[5] = layout_keys_held_over();
   return true;
 }
 
@@ -784,6 +814,8 @@ bool board_command(const uint8_t *in, uint8_t *out) {
   case BOARD_COMMAND_SET_GAMEPAD_ACTIVE:
   case BOARD_COMMAND_SET_PROFILE:
     return gamepad_command(in, out);
+  case BOARD_COMMAND_PAUSE_INPUT:
+    return pause_input_command(in, out);
   default:
 #if defined(BOARD_RGB)
     return rgb_command(in, out);

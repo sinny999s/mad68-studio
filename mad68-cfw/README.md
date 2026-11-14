@@ -82,9 +82,22 @@ re-creates all four official images byte-for-byte.
 
 ### Bootloader protocol (from the web configurator)
 
-Enter: unplug, hold **Esc**, plug in (or the firmware's own jump). The device
-re-enumerates as `373B:2024` with one HID interface, usage page `0xFF` and
-usage `1`. Replugging without flashing returns to the application.
+Enter: the running firmware's own jump (holding **Esc** while plugging in does
+**not** work on this keyboard). The device re-enumerates as `373B:2024` with
+one HID interface, usage page `0xFF` and usage `1`. Replugging without
+flashing returns to the application.
+
+**From MadLions' stock firmware** the official updater asks for the jump with a
+32-byte report on the stock raw HID interface (usage page `0xFF60`, usage
+`0x61`): `96 96 96 98` ("IapMode" in hub.fgg.com.cn's code). In stock v1.06
+(all three files) the raw HID receive function (`0x0802CEE8`) passes command
+`0x96` to a handler at `0x0802629C`: byte 1 must be `0x96`; a byte 2 of `0x96`
+first runs the stock settings reset; byte 3 `0x98` sets the RAM flag
+(`0x96969696` at `0x2001FFFC`), resets the peripherals, sets VTOR to
+`0x08000000` and jumps into the bootloader (`0x97` is a plain restart).
+MAD68 Studio 0.13.0 sends `96 96 00 98`, which skips the settings reset.
+`tools/stock_update_mode.py` checks this in the emulator (18/18,
+`out/stock_update_mode.log`).
 
 The MAD68 HE uses the configurator's "DuckBread" sector upgrade. This was
 confirmed by recording a working official install
@@ -1112,3 +1125,44 @@ still read the bottom row once. There, smoothing levels 1 to 3 drop a stray
 reading (the median of three) and Classic lets it through at a sixteenth of
 its size, as in v7.4. The lighting while the PC is asleep was checked by hand
 (see that section).
+
+## Typing pause for calibration (v7.6)
+
+Calibrating means pressing every key all the way down, and on a keyboard
+that types while you do it, that means the Windows key, Alt, F-keys and
+everything else go to the PC. v7.6 can pause typing on request.
+
+**PAUSE_INPUT (0x6D)**: `[1]` 0 = status only, 1 = pause for `[2..3]`
+milliseconds (LE16, 1 to 10,000) from now, 2 = end the pause now. Reply:
+`[1]` protocol 1, `[2]` 1 while paused, `[3..4]` milliseconds left (LE16),
+`[5]` keys still silent because they were held when a pause ended. A bad
+request (0 ms, more than 10,000 ms, an unknown action) is refused.
+
+- While paused the layout reads every key as released. A key held when the
+  pause starts gets a proper release (layers, advanced keys and all), then
+  nothing reaches the PC: no keys, modifiers, media or power keys, mouse
+  keys, layer or profile keys, Fn+Ins, or controller output (the sticks are
+  centred and the buttons let go).
+- The keys are still read: live travel, Rapid Trigger state, the lighting
+  that follows the keys, and the bottom-out learning that calibration relies
+  on all carry on.
+- The pause ends by itself once the requested time passes without another
+  request. MAD68 Studio asks for 3 seconds every second, so a closed app, a
+  crash or a pulled cable gives the keys back within 3 seconds. Nothing is
+  saved: a power-up always types.
+- A key held when a pause ends stays silent until it is let go, so ending
+  the pause mid-press never types that key.
+
+**Also in v7.6:** when a key is let go, the slot it leaves in the six-key
+part of the keyboard report is cleared. That part is padding for Windows
+(which reads the NKRO bitmap), but a BIOS reading the boot protocol would
+have seen the last key let go as still held. Found by the new emulator check.
+
+**Emulator** (`tools/verify_cfw.py` section 25, 475/475 in total): a held W
+released when the pause starts; Shift, A and Fn+Ins pressed while paused
+type nothing and change no layer; after Recalibrate a key pressed while
+paused has its bottom-out value learned; repeated requests keep the pause;
+without them it ends on time; keys held across the end stay silent until let
+go (and type normally when pressed again); bad requests refused; with the
+controller on, a bound key's stick goes back to centre while paused and
+stays there until the key is let go.

@@ -61,6 +61,7 @@ export enum HMK_Command {
   GET_SCAN = 0x68,
   SET_SCAN = 0x69,
   SET_SCAN_FILTER = 0x6c,
+  PAUSE_INPUT = 0x6d,
 
   UNKNOWN = 255,
 }

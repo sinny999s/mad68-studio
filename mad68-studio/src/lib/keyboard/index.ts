@@ -19,6 +19,10 @@ import type { HMK_AdvancedKey } from "$lib/libhmk/advanced-keys"
 import type { HMK_AnalogInfo } from "$lib/libhmk/commands"
 import type { FirmwareInfo } from "$lib/libhmk/commands/firmware-info"
 import type { GamepadState } from "$lib/libhmk/commands/gamepad-state"
+import type {
+  InputPauseAction,
+  InputPauseState,
+} from "$lib/libhmk/commands/input-pause"
 import type { Rgb, RgbConfig, RgbInfo } from "$lib/libhmk/commands/rgb"
 import type { ScanSpeedInfo } from "$lib/libhmk/commands/scan-speed"
 import type { HMK_GamepadOptions } from "$lib/libhmk/gamepad"
@@ -125,6 +129,13 @@ export type KeyboardAction = {
   setScanSpeed(speed: number): Promise<ScanSpeedInfo>
   /** Applies at once and is saved on the keyboard (firmware v7.4) */
   setScanSmoothing(level: number): Promise<ScanSpeedInfo>
+  /** Typing pause state; null before firmware v7.6 */
+  getInputPause(): Promise<InputPauseState | null>
+  /**
+   * Pause typing for a while (the pause ends by itself unless asked for again
+   * in time), end it, or just read it (firmware v7.6). Not saved.
+   */
+  setInputPause(request: InputPauseAction): Promise<InputPauseState>
 }
 
 export type Keyboard = KeyboardState & KeyboardAction

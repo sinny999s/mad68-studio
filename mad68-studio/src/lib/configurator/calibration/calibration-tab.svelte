@@ -16,10 +16,11 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 <script lang="ts">
   import * as KeyboardEditor from "$lib/components/keyboard-editor"
   import type { WithoutChildren } from "$lib/utils"
-  import type { ComponentProps } from "svelte"
+  import { onMount, type ComponentProps } from "svelte"
   import CalibrationKeyboard from "./calibration-keyboard.svelte"
   import CalibrationMenu from "./calibration-menu.svelte"
   import CalibrationMenubar from "./calibration-menubar.svelte"
+  import { TypingPause, typingPauseContext } from "./typing-pause.svelte"
 
   // Live key travel is polled from configurator.svelte while this page or
   // Performance is open.
@@ -27,6 +28,29 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   const {
     ...props
   }: WithoutChildren<ComponentProps<typeof KeyboardEditor.Root>> = $props()
+
+  const typingPause = typingPauseContext.set(new TypingPause())
+
+  onMount(() => {
+    typingPause.check()
+    // Typing comes back as soon as the user turns to anything else: the keys
+    // must work in the window they switched to.
+    const onBlur = () => typingPause.stop("you switched to another window")
+    const onHidden = () => {
+      if (document.hidden) typingPause.stop("the window was hidden")
+    }
+    const onUnload = () => typingPause.stop()
+    window.addEventListener("blur", onBlur)
+    document.addEventListener("visibilitychange", onHidden)
+    window.addEventListener("beforeunload", onUnload)
+    return () => {
+      window.removeEventListener("blur", onBlur)
+      document.removeEventListener("visibilitychange", onHidden)
+      window.removeEventListener("beforeunload", onUnload)
+      // Leaving the page ends the pause
+      typingPause.stop()
+    }
+  })
 </script>
 
 <KeyboardEditor.Root {...props}>

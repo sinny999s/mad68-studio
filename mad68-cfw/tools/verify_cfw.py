@@ -66,6 +66,11 @@ interrupts, and checks:
      and a changed actuation point still reaches a key held still within a
      few milliseconds, with and without Rapid Trigger, at every kind of
      smoothing
+ 25. v7.6 typing pause (PAUSE_INPUT): keys held when it starts are released,
+     nothing typed, no layer, profile or Fn+Ins action, controller centred,
+     while key readings and calibration carry on; it lasts while the host
+     repeats it and ends by itself when the time runs out; a key held when
+     it ends stays silent until let go; bad requests refused; nothing saved
 
 Usage: python verify_cfw.py <firmware.elf> <firmware raw .bin> <nm.exe> <dir with backup/ and tools/>
 """
@@ -867,6 +872,7 @@ def main():
     sleep_lights_v75(image, syms, rest, build_id, Path(sys.argv[4]), led_map, keys, kidx)
     paired_v75(image, syms, rest, build_id, keys, kidx)
     main_loop_v75(image, syms, rest, build_id, keys, kidx)
+    input_pause_v76(image, syms, rest, build_id, keys, kidx)
 
     print('[9] flash integrity across all runs: checked per scenario above')
     failed = [w for ok, w in results if not ok]
@@ -1859,9 +1865,9 @@ def stick_v72(gamepad, syms, kidx):
 
 
 def firmware_info_v72(image, syms, rest, build_id):
-    """[18] GET_FIRMWARE_INFO and the release marker (v7.2; release 7.5.0 now)."""
+    """[18] GET_FIRMWARE_INFO and the release marker (v7.2; release 7.6.0 now)."""
     print('[18] firmware info v7.2 (release, build ID, marker in the image)')
-    GET_FIRMWARE_INFO, MARKER = 0x67, b'MAD68CFW v7.5.0'
+    GET_FIRMWARE_INFO, MARKER = 0x67, b'MAD68CFW v7.6.0'
     e = Cfw(image, syms, rest, journal=struct.pack('<I', build_id))
     e.stub_usb_host()
     e.run_until(lambda: e.r8('baseline_ready') == 1 and e.p.regs.get(OTG + 0x18, 0) != 0, 3000)
@@ -1877,15 +1883,15 @@ def firmware_info_v72(image, syms, rest, build_id):
 
     r = command([GET_FIRMWARE_INFO])
     bid = struct.unpack_from('<I', r, 4)[0]
-    check(r[0] == GET_FIRMWARE_INFO and tuple(r[1:4]) == (7, 5, 0),
-          f'GET_FIRMWARE_INFO reports release 7.5.0 ({tuple(r[1:4])}, reply {r[0]:#x})')
+    check(r[0] == GET_FIRMWARE_INFO and tuple(r[1:4]) == (7, 6, 0),
+          f'GET_FIRMWARE_INFO reports release 7.6.0 ({tuple(r[1:4])}, reply {r[0]:#x})')
     check(bid == build_id, f'and the ID of this build ({bid:#010x} vs {build_id:#010x})')
     check(r[8:32] == MARKER + bytes(24 - len(MARKER)),
           f'and the marker, zero-padded over whatever was in the buffer ({r[8:32]!r})')
     check(image.count(MARKER + bytes(1)) == 1,
           f'the marker is in the image exactly once, so the app can read the release from a file ({image.count(MARKER)})')
-    r = command([0x6D])
-    check(r[0] == 0xFF, f'the next unused board command (0x6D) is still refused ({r[0]:#x})')
+    r = command([0x6E])
+    check(r[0] == 0xFF, f'the next unused board command (0x6E) is still refused ({r[0]:#x})')
     bad = [hex(a) for a in e.flash_report() if not (0x08040000 <= a < 0x08080000)]
     check(not bad, f'no flash changed outside sectors 6/7 {bad}')
 
@@ -3771,23 +3777,26 @@ def main_loop_v75(image, syms, rest, build_id, keys, kidx):
         took = e.ticks - t0
         ok = r[0] == SET_ACTUATION and bool(e.is_pressed(k)) == want and seen_by_layout(e) == want
         e.run_until(lambda: False, 5)
+        moved.append((before, filtered(e)))
         return ok, took, filtered(e) == before, want
 
+    moved = []
     for speed, level, name in ((6, 3, 'Max, Fast smoothing'), (3, 1, 'Fastest, Smooth'), (6, 0, 'Max, Classic')):
         e = boot(speed, level)
         mode = command(e, [STATUS, 0])[2]
-        # hold W part of the way down, until its travel stands still
+        # hold W part of the way down, until its travel stands still (Smooth at
+        # one-ADC speeds can take a while to settle its last count)
         e.press[rc] = -300
         prev, same = None, 0
-        for _ in range(1500):
+        for _ in range(3000):
             e.step()
             now = (filtered(e), travel(e))
             same = same + 1 if now == prev else 0
             prev = now
-            if same >= 60:
+            if same >= 200:
                 break
         d = travel(e)
-        check(same >= 60 and 30 < d < 220 and mode == (7 if speed > 3 else 0),
+        check(same >= 200 and 30 < d < 220 and mode == (7 if speed > 3 else 0),
               f'{name}: W held part of the way down reads a steady travel of {d} (read mode {mode})')
         steps = []
         ok1, t1, still1, want1 = actuation(e, d - 15)
@@ -3797,7 +3806,8 @@ def main_loop_v75(image, syms, rest, build_id, keys, kidx):
         steps = [t1, t2, t3, t4]
         check(ok1 and ok2 and (want1, want2) == (True, False) and still1 and still2 and max(t1, t2) <= 3,
               f'{name}: its actuation point moved below, then above where it is held: pressed, then released, '
-              f'within {max(t1, t2)} ms and without its filtered value changing')
+              f'within {max(t1, t2)} ms and without its filtered value changing '
+              f'(ok {ok1, ok2}, want {want1, want2}, filtered before/after {moved[-4:-2]})')
         check(ok3 and ok4 and (want3, want4) == (True, False) and still3 and still4 and max(t3, t4) <= 3,
               f'{name}: the same with Rapid Trigger on ({steps[2:]} ms)')
         e.press.pop(rc)
@@ -3807,6 +3817,201 @@ def main_loop_v75(image, syms, rest, build_id, keys, kidx):
               f'{name}: let go, W is back at rest and no key is pressed')
         bad_flash = [hex(a) for a in e.flash_report() if not (0x08040000 <= a < 0x08080000)]
         check(not bad_flash, f'{name}: no flash changed outside sectors 6/7 {bad_flash}')
+
+
+def input_pause_v76(image, syms, rest, build_id, keys, kidx):
+    """[25] v7.6: PAUSE_INPUT (0x6D) silences the keys for calibration. Keys
+    held when it starts are released, nothing reaches the PC (keys, layers,
+    Fn+Ins, controller) while readings and calibration carry on, it lasts
+    while the host repeats it, ends by itself, and a key held when it ends
+    stays silent until it is let go."""
+    print('[25] v7.6 typing pause (silent keys, readings and calibration go on, ends by itself)')
+    from unicorn import UC_HOOK_CODE
+    PAUSE, RECALIBRATE = 0x6D, 4
+    SET_OPTIONS, SET_GP_BUTTONS, SET_GP_OPTIONS = 10, 137, 139
+    LS_UP = 16
+    W, A_, S, LSHIFT, FN, INS = (1, 2), (2, 1), (2, 2), (3, 0), (4, 10), (0, 14)
+    check(all(rc in kidx for rc in (W, A_, S, LSHIFT, FN, INS)), 'test keys are populated positions')
+
+    def boot(controller=False):
+        e = Cfw(image, syms, rest, journal=struct.pack('<I', build_id))
+        e.stub_usb_host()
+        sent = []
+        if controller:
+            # A host that has the controller interface configured and polls it
+            def ret(val):
+                def h(uc, addr, size, data):
+                    uc.reg_write(UC_ARM_REG_R0, val)
+                    uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
+                return h
+
+            def xfer(uc, addr, size, data):
+                ep, buf, n = (uc.reg_read(r) for r in (UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3))
+                if ep == 0x84:
+                    sent.append(bytes(uc.mem_read(buf, n)))
+                uc.reg_write(UC_ARM_REG_R0, 1)
+                uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
+            for name, h in (('tud_mounted', ret(1)), ('tud_suspended', ret(0)), ('usbd_edpt_busy', ret(0)),
+                            ('usbd_edpt_claim', ret(1)), ('usbd_edpt_release', ret(1)), ('usbd_edpt_xfer', xfer)):
+                a = syms[name] & ~1
+                e.uc.hook_add(UC_HOOK_CODE, h, begin=a, end=a)
+        e.run_until(lambda: e.r8('baseline_ready') == 1 and e.p.regs.get(OTG + 0x18, 0) != 0, 3000)
+        e.run_until(lambda: False, 200)
+        return e, sent
+
+    def command(e, payload, limit=400):
+        scratch = (syms['_ebss'] + 0x100) & ~3
+        e.uc.mem_write(scratch, bytes(payload) + bytes(64 - len(payload)))
+        e.uc.mem_write(syms['out_buf'], bytes(64))
+        enqueue(e, scratch)
+        e.run_until(lambda: e.uc.mem_read(syms['out_buf'], 1)[0] != 0, limit)
+        return bytes(e.uc.mem_read(syms['out_buf'], 64))
+
+    def pause(e, ms):
+        return command(e, [PAUSE, 1, ms & 0xFF, ms >> 8])
+
+    def state(e, action=0):
+        r = command(e, [PAUSE, action])
+        return {'id': r[0], 'proto': r[1], 'paused': r[2], 'left': r[3] | r[4] << 8, 'held': r[5]}
+
+    def kb(e):
+        return bytes(e.uc.mem_read(syms['kb_report'], 28))
+
+    def typed(e, rc):
+        return e.r8('active_keycodes', kidx[rc])
+
+    def travel(e, rc):
+        return e.r8('key_matrix', kidx[rc] * 10 + 6)
+
+    def bottom(e, rc):
+        return e.r16(syms['key_matrix'] + kidx[rc] * 10 + 4)
+
+    def hold(e, rc, delta=-900):
+        e.press[rc] = delta
+        e.run_until(lambda: e.is_pressed(kidx[rc]), 400)
+        e.run_until(lambda: False, 30)
+
+    def let_go(e, rc):
+        e.press.pop(rc, None)
+        e.run_until(lambda: not e.is_pressed(kidx[rc]), 400)
+        e.run_until(lambda: False, 30)
+
+    silent = lambda e: not any(kb(e))
+
+    e, _ = boot()
+    s = state(e)
+    check(s['id'] == PAUSE and s['proto'] == 1 and not s['paused'] and s['held'] == 0,
+          f'PAUSE_INPUT status: protocol 1, not paused after power-up ({s})')
+    hold(e, W)
+    check(typed(e, W) != 0 and not silent(e), 'before the pause: W held types')
+
+    # --- pause with W held ---
+    r = pause(e, 3000)
+    e.run_until(lambda: False, 10)
+    left = r[3] | r[4] << 8
+    check(r[0] == PAUSE and r[2] == 1 and 2950 <= left <= 3000, f'pause for 3 s: paused, {left} ms left')
+    check(typed(e, W) == 0 and silent(e), f'the held W is released: nothing in the keyboard report ({kb(e)[:8].hex()})')
+    check(e.is_pressed(kidx[W]) and travel(e, W) > 200,
+          f'while the keyboard still reads W as held all the way ({travel(e, W)})')
+    hold(e, LSHIFT)
+    hold(e, A_)
+    check(silent(e) and typed(e, LSHIFT) == 0 and typed(e, A_) == 0 and e.is_pressed(kidx[A_]),
+          'Shift and A pressed while paused: read by the keyboard, nothing typed')
+    hold(e, FN)
+    hold(e, INS)
+    e.run_until(lambda: e.in_bootloader, 60)
+    check(not e.in_bootloader and e.r8('layer_mask') == 0 and silent(e),
+          f'Fn+Ins while paused: no Fn layer, no update mode (layer mask {e.r8("layer_mask")})')
+    for rc in (INS, FN, A_, LSHIFT, W):
+        let_go(e, rc)
+    check(silent(e) and state(e)['paused'] == 1, 'all let go: still paused, still silent')
+
+    # --- calibration carries on while paused ---
+    command(e, [RECALIBRATE], limit=2000)
+    e.run_until(lambda: False, 50)
+    pause(e, 3000)
+    b0 = bottom(e, S)
+    hold(e, S)
+    e.run_until(lambda: False, 60)
+    b1 = bottom(e, S)
+    check(b1 > b0 + 200 and typed(e, S) == 0 and silent(e),
+          f'after Recalibrate, S pressed all the way while paused: its bottom-out value is learned ({b0} -> {b1}), nothing typed')
+
+    # --- the host keeps it going ---
+    for _ in range(4):
+        e.run_until(lambda: False, 900)
+        pause(e, 1500)
+    s = state(e)
+    check(s['paused'] == 1 and typed(e, S) == 0 and silent(e),
+          f'repeated every 0.9 s for 3.6 s: still paused, S still silent ({s["left"]} ms left)')
+
+    # --- the host stops asking: the pause ends by itself ---
+    e.run_until(lambda: False, 1600)
+    s = state(e)
+    check(s['paused'] == 0 and s['left'] == 0 and s['held'] == 1,
+          f'no repeat for 1.6 s: the pause has ended by itself, S counted as held over ({s})')
+    e.run_until(lambda: False, 50)
+    check(typed(e, S) == 0 and silent(e), 'S held since the pause stays silent')
+    let_go(e, S)
+    check(state(e)['held'] == 0, 'S let go: no key held over')
+    hold(e, S)
+    check(typed(e, S) != 0 and not silent(e), 'S pressed again: types')
+    let_go(e, S)
+
+    # --- ended by the host with keys held ---
+    pause(e, 3000)
+    hold(e, W)
+    hold(e, LSHIFT)
+    s = state(e, 2)
+    e.run_until(lambda: False, 50)
+    check(s['paused'] == 0 and s['held'] == 2 and silent(e) and typed(e, W) == 0 and typed(e, LSHIFT) == 0,
+          f'pause ended with W and Shift held: both stay silent ({s})')
+    let_go(e, W)
+    hold(e, W)
+    rep = kb(e)
+    check(typed(e, W) != 0 and typed(e, LSHIFT) == 0 and rep[0] == 0 and any(rep[8:]),
+          f'W let go and pressed again types, Shift still held from the pause does not (modifiers {rep[0]:#x})')
+    let_go(e, W)
+    let_go(e, LSHIFT)
+    check(state(e)['held'] == 0 and silent(e), 'everything let go: nothing held over, report empty')
+    s = state(e, 2)
+    check(s['id'] == PAUSE and s['paused'] == 0, 'ending a pause that is not on is harmless')
+
+    # --- bad requests ---
+    bad = [command(e, p)[0] for p in ([PAUSE, 1, 0, 0], [PAUSE, 1, 0x11, 0x27], [PAUSE, 3])]
+    check(bad == [0xFF] * 3, f'0 ms, 10001 ms and an unknown action are refused {[hex(b) for b in bad]}')
+    r = pause(e, 10000)
+    check(r[0] == PAUSE and r[2] == 1 and (r[3] | r[4] << 8) == 10000, 'the longest pause (10 s) is accepted')
+    state(e, 2)
+    bad_flash = [hex(a) for a in e.flash_report() if not (0x08040000 <= a < 0x08080000)]
+    check(not bad_flash and not e.in_bootloader, f'no flash changed outside sectors 6/7 {bad_flash}')
+
+    # --- controller output ---
+    e, sent = boot(controller=True)
+    command(e, [SET_OPTIONS, 5, 0])
+    command(e, [SET_GP_BUTTONS, 0, kidx[W], 1, LS_UP])
+    command(e, [SET_GP_OPTIONS, 0, 4, 20, 85, 95, 165, 170, 255, 255, 0x0B])
+    e.uc.mem_write(syms['endpoint_in'], bytes([0x84]))      # host opened the interface
+    e.run_until(lambda: False, 40)
+
+    def stick():
+        return struct.unpack_from('<HBBhhhh', sent[-1], 2) if sent else (0, 0, 0, 0, 0, 0, 0)
+    hold(e, W)
+    e.run_until(lambda: stick()[4] >= 32000, 400)
+    e.run_until(lambda: False, 80)               # key travel settles over a few scans
+    check(stick()[4] == 32640, f'controller: W bound to the left stick pushes it all the way up ({stick()[4]})')
+    pause(e, 3000)
+    e.run_until(lambda: stick()[4] == 0, 100)
+    e.run_until(lambda: False, 50)
+    check(stick()[:5] == (0, 0, 0, 0, 0), f'paused with W held: stick centred, no buttons {stick()[:5]}')
+    state(e, 2)
+    e.run_until(lambda: False, 60)
+    check(stick()[4] == 0, f'pause ended with W held: the stick stays centred until W is let go ({stick()[4]})')
+    let_go(e, W)
+    hold(e, W)
+    e.run_until(lambda: stick()[4] >= 32000, 400)
+    e.run_until(lambda: False, 80)
+    check(stick()[4] == 32640, f'W pressed again: stick up again ({stick()[4]})')
 
 
 def check_handoff(e: Cfw):

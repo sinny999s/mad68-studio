@@ -104,6 +104,20 @@ const HMK_COMMAND_BOOTLOADER = 2
 const QMK_USAGE_PAGE = 0xff60
 const QMK_USAGE = 0x61
 const QMK_UPDATE_MODE_REQUEST = [0x07, 0x00, 0x4d, 0x42, 0x4f, 0x4f, 0x54]
+// MadLions' stock firmware takes its update-mode request on its own raw HID
+// interface (also usage page 0xFF60, usage 0x61, 32-byte reports). The
+// official updater (hub.fgg.com.cn, "IapMode") sends 96 96 96 98. In stock
+// v1.06 (Lightless, RGB and Ultra/Limit alike: handler at 0x0802629C, reached
+// from the raw HID receive function at 0x0802CEE8) a third byte of 0x96 first
+// runs the stock settings reset; any other value skips it. Studio sends
+// 96 96 00 98, so the firmware only sets the update-mode flag (0x96969696 at
+// 0x2001FFFC) and jumps to the bootloader, and the stock settings stay as they
+// are. Checked on all three stock files in the emulator
+// (mad68-cfw/tools/stock_update_mode.py): flag set, VTOR 0x08000000, jump into
+// the bootloader, no flash writes.
+const STOCK_USAGE_PAGE = 0xff60
+const STOCK_USAGE = 0x61
+const STOCK_UPDATE_MODE_REQUEST = [0x96, 0x96, 0x00, 0x98]
 // The bootloader exposes more than one HID interface; the update channel is
 // the vendor collection the official tool filters for (usage page 0xFF,
 // usage 1). Another interface streams input reports on its own, which look
@@ -322,6 +336,25 @@ export async function qmkFirmwareToBootloader() {
   const report = new Uint8Array(32)
   report.set(QMK_UPDATE_MODE_REQUEST)
   // It answers, then restarts about 50 ms later
+  await device.sendReport(0, report).catch(() => undefined)
+  await device.close().catch(() => undefined)
+}
+
+/** Ask MadLions' stock firmware to restart into the vendor bootloader. */
+export async function stockFirmwareToBootloader() {
+  const device = (await madlionsDevices()).find(
+    (d) =>
+      boardByAppPid(d.productId) !== null &&
+      d.collections.some(
+        (c) => c.usagePage === STOCK_USAGE_PAGE && c.usage === STOCK_USAGE,
+      ),
+  )
+  if (!device) throw new Error("Stock firmware's update channel not found.")
+  trace(`stock update-mode request to ${describe(device)}`)
+  if (!device.opened) await device.open()
+  const report = new Uint8Array(32)
+  report.set(STOCK_UPDATE_MODE_REQUEST)
+  // It jumps to the bootloader without answering; a failed send is expected
   await device.sendReport(0, report).catch(() => undefined)
   await device.close().catch(() => undefined)
 }
@@ -549,9 +582,10 @@ export async function flashFirmware(
 }
 
 // Holding Esc while plugging in does not enter update mode on this keyboard
-// (except with the QMK build, which checks for it itself)
+// (except with the QMK build, which checks for it itself). These are the ways
+// left when the app's own request doesn't get through.
 export const MANUAL_UPDATE_MODE_INSTRUCTIONS =
-  "With the custom firmware, press Fn+Ins to switch it to update mode. With the QMK firmware, press Fn+Ins, or unplug the keyboard and hold Esc while plugging it back in. With the stock firmware, start the update from MadLions' own updater."
+  "With the custom firmware, press Fn+Ins to switch it to update mode. With the QMK firmware, press Fn+Ins, or unplug the keyboard and hold Esc while plugging it back in. With the stock firmware, start an update in MadLions' own updater (hub.fgg.com.cn), then close it once the keyboard stops typing."
 
 export type InstallEvents = {
   onStatus: (status: string) => void
@@ -574,19 +608,25 @@ export async function installFirmware(image: FirmwareImage, ev: InstallEvents) {
   const early = seen && stockMismatch(image, seen)
   if (early) throw new Error(early)
 
-  if (current === "custom" || current === "qmk") {
+  const canRequest =
+    current === "custom" || current === "qmk" || current === "stock"
+  if (canRequest) {
     ev.onStatus("Restarting the keyboard into update mode...")
     // The firmware restarts without answering, so look for the bootloader
     // straight away instead of waiting for the command to time out
     const request =
       current === "qmk"
         ? qmkFirmwareToBootloader
-        : (ev.enterBootloader ?? customFirmwareToBootloader)
-    void request().catch(() => undefined)
+        : current === "stock"
+          ? stockFirmwareToBootloader
+          : (ev.enterBootloader ?? customFirmwareToBootloader)
+    void request().catch((e) =>
+      trace(`update-mode request (${current}) failed: ${e}`),
+    )
     device = await waitForBootloader(10000, isCancelled)
   }
   if (!device && !isCancelled()) {
-    if (current === "custom" || current === "qmk") {
+    if (canRequest) {
       ev.onStatus(
         `The keyboard did not restart by itself. ${MANUAL_UPDATE_MODE_INSTRUCTIONS}`,
       )

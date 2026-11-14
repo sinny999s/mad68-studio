@@ -165,7 +165,9 @@ void hid_keycode_remove(uint8_t keycode) {
       if (kb_report.keycodes[i] == hid_code) {
         memmove(kb_report.keycodes + i, kb_report.keycodes + i + 1,
                 sizeof(uint8_t) * (num_6kro_keys - i - 1));
-        num_6kro_keys--;
+        // Clear the slot left free: a host using the boot protocol (BIOS)
+        // reads all six, and would see the last key let go as still held
+        kb_report.keycodes[--num_6kro_keys] = 0;
         break;
       }
     }

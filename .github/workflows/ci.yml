@@ -67,6 +67,9 @@ jobs:
           python tools/verify_cfw.py out/MAD68HE_libhmk.elf out/MAD68HE_libhmk.img
           ~/.platformio/packages/toolchain-gccarmnoneeabi/bin/arm-none-eabi-nm .
 
+      - name: Stock firmware update-mode request (MAD68 Studio's install from stock)
+        run: python tools/stock_update_mode.py
+
       - uses: actions/upload-artifact@v4
         with:
           name: firmware

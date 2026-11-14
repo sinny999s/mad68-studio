@@ -51,6 +51,11 @@ import {
   setActiveProfile,
   setGamepadActive,
 } from "$lib/libhmk/commands/gamepad-state"
+import {
+  getInputPause,
+  setInputPause,
+  type InputPauseAction,
+} from "$lib/libhmk/commands/input-pause"
 import { getKeymap, setKeymap } from "$lib/libhmk/commands/keymap"
 import { getMacros, setMacros } from "$lib/libhmk/commands/macros"
 import { getMetadata } from "$lib/libhmk/commands/metadata"
@@ -265,6 +270,12 @@ class HMKKeyboard implements Keyboard {
   }
   setScanSmoothing(level: number) {
     return setScanSmoothing(this.commander, level)
+  }
+  getInputPause() {
+    return getInputPause(this.commander)
+  }
+  setInputPause(request: InputPauseAction) {
+    return setInputPause(this.commander, request)
   }
 }
 

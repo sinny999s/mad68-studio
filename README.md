@@ -32,13 +32,13 @@ each:
 | Board | USB ID | Status |
 |---|---|---|
 | MAD68 HE **RGB** | `373B:1058` | Tested, in daily use |
-| MAD68 HE **Lightless** | `373B:1057` | Supported, not yet tested on a real board |
+| MAD68 HE **Lightless** | `373B:1057` | Tested by a user on v7.5 ([#1](../../issues/1)) |
 | MAD68 HE **Ultra** | `373B:1059` | Supported, not yet tested on a real board |
 | MAD68 HE **Limit** | `373B:105A` or `373B:105C` | Supported, not yet tested on a real board |
 
 MAD68 Studio recognises each board and restores the right stock firmware for
-it. Your board's USB ID is in Device Manager: Keyboard > Properties > Details
-> Hardware Ids.
+it. Your board's USB ID is in Device Manager: Keyboard > Properties >
+Details > Hardware Ids.
 
 **Not supported:** the MAD68 HE V2 (a newer platform with different
 firmware), and the MAD68 R and MAD68 Pro, which use a different kind of
@@ -51,13 +51,26 @@ Get `MAD68-Studio-<version>-portable.exe` from
 because the exe is not code-signed: choose **More info**, then **Run anyway**.
 
 To install the custom firmware, open the app and go to **Firmware**, then
-**Install custom firmware**. The keyboard restarts by itself in a few seconds.
+**Install custom firmware**. The app switches the keyboard into update mode by
+itself, and the keyboard restarts on the new firmware in a few seconds.
+
+- **First install, from MadLions' stock firmware:** from MAD68 Studio 0.13.0
+  the app sends the stock firmware the same update-mode request as MadLions'
+  updater, without the updater's reset of your stock settings. This is checked
+  in the emulator on all three stock firmware files and was tested on a real
+  MAD68 HE RGB on stock v1.06: it switched to update mode in 1.2 seconds. If
+  the keyboard hasn't switched after 10 seconds,
+  start an update in MadLions' own updater
+  ([hub.fgg.com.cn](https://hub.fgg.com.cn)), close it once the keyboard stops
+  typing, and the app carries on. MAD68 Studio 0.12.0 and older always need
+  that step.
 
 > **Flashing firmware is at your own risk.** The keyboard's update program is
 > never erased, and these are the ways back into update mode:
 >
 > - **The app:** the install button puts the keyboard into update mode by
->   itself, on stock firmware and on this custom firmware.
+>   itself, on this custom firmware and (from MAD68 Studio 0.13.0) on stock
+>   firmware. On stock, MadLions' updater is the fallback.
 > - **On the keyboard:** with the custom firmware, press Fn+Ins.
 > - **Automatic:** if a newly installed custom build cannot connect over USB,
 >   it returns to update mode by itself within about 9 seconds.
