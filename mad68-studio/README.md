@@ -7,7 +7,7 @@ wrapped in Electron, with MAD68-specific additions.
 
 ## Run it
 
-Start `release/MAD68-Studio-0.13.0-portable.exe` (also copied to the Desktop as `MAD68 Studio.exe`). It needs no install.
+Start `release/MAD68-Studio-0.14.0-portable.exe` (also copied to the Desktop as `MAD68 Studio.exe`). It needs no install.
 
 - Windows SmartScreen may warn because the exe is not code-signed. Choose
   **More info, then Run anyway**.
@@ -133,6 +133,16 @@ Plus MAD68-specific pages:
   left silent. A key held when the pause ends stays silent until it is let
   go. On older firmware the page suggests pressing the keys in an empty
   Notepad window instead.
+- **Switch Travel** (Settings, 0.14.0): 4.0 mm (the default, as before) or
+  3.5 mm (Gateron Magnetic Jade, Jade Pro and Jade Max, TTC King). The
+  keyboard measures each key from rest to its calibrated bottom (0-255) and
+  knows nothing about millimetres, so this only changes how distances are
+  shown and set: actuation points, Rapid Trigger, key depth, Rest Check and
+  the advanced-key sliders all use it, and the sliders keep 0.05 mm steps (70
+  of them at 3.5 mm). An actuation point stays where it is on the key, so
+  switching to 3.5 mm shows a stored 2.00 mm as 1.75 mm. Saved on this
+  computer; nothing is written to the keyboard. Checked on 3.5 mm Jade Pros:
+  all 68 keys reached full travel after recalibrating.
 - **Try Demo** on the start screen opens a MAD68 HE with its real layout and
   default keymap, with simulated typing, so every page can be tried without
   a keyboard.

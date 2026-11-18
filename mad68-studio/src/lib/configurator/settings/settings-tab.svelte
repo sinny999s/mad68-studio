@@ -30,6 +30,11 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     type ScanSpeedInfo,
   } from "$lib/libhmk/commands/scan-speed"
   import { markRestart } from "$lib/restart"
+  import {
+    setSwitchTravel,
+    SWITCH_TRAVELS,
+    switchTravel,
+  } from "$lib/switch-travel.svelte"
   import { cn, isFeatureAvailable, type WithoutChildren } from "$lib/utils"
   import { toast } from "svelte-sonner"
   import type { HTMLAttributes } from "svelte/elements"
@@ -387,6 +392,40 @@ this program. If not, see <https://www.gnu.org/licenses/>.
           </RadioGroup.Root>
         </div>
       {/if}
+      <div class="grid gap-3">
+        <div class="grid gap-1">
+          <span class="text-sm font-bold">Switch Travel</span>
+          <p class="text-sm text-wrap text-muted-foreground">
+            How far your switches go down, so the app shows actuation points,
+            Rapid Trigger and key depth in real millimetres. The keyboard
+            measures each key from rest to its calibrated bottom, so this
+            changes nothing on it: your actuation points stay where they are on
+            the key and are shown in the new millimetres. Saved on this
+            computer.
+          </p>
+        </div>
+        <RadioGroup.Root
+          bind:value={
+            () => String(switchTravel.mm), (v) => setSwitchTravel(Number(v))
+          }
+        >
+          {#each SWITCH_TRAVELS as travel (travel.mm)}
+            <div class="flex items-start gap-3">
+              <RadioGroup.Item
+                class="mt-0.5"
+                id="switch-travel-{travel.mm}"
+                value={String(travel.mm)}
+              />
+              <div class="grid gap-1">
+                <Label for="switch-travel-{travel.mm}">{travel.title}</Label>
+                <p class="text-sm text-wrap text-muted-foreground">
+                  {travel.description}
+                </p>
+              </div>
+            </div>
+          {/each}
+        </RadioGroup.Root>
+      </div>
       <div class="flex flex-col gap-2">
         <div class="grid text-sm text-wrap">
           <span class="font-bold">Restart Keyboard</span>

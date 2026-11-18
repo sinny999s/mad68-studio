@@ -21,15 +21,16 @@
 // a real keyboard, the demo keyboard or a list of made-up readings. It only
 // ever reads.
 //
-// Distances are on the keyboard's own scale, 0 at rest to 255 at 4.0 mm,
-// unless a name says millimetres.
+// Distances are on the keyboard's own scale, 0 at rest to 255 at the bottom
+// of the key (the switch travel chosen in Settings), unless a name says
+// millimetres.
 
 import {
   displayDistance,
+  DISTANCE_STEP_MM,
   distanceToMM,
   distanceToUnit,
-  SWITCH_DISTANCE_MM,
-  SWITCH_DISTANCE_UNIT,
+  switchDistanceUnit,
   unitToDistance,
 } from "$lib/distance"
 import type { HMK_Actuation } from "$lib/libhmk/actuation"
@@ -174,7 +175,7 @@ export async function measureAtRest(options: {
 // steps. (An actuation point is stored on the 0-255 scale, which can be up to
 // 0.008 mm away from the step it is shown as.)
 
-const HUNDREDTHS_PER_UNIT = (100 * SWITCH_DISTANCE_MM) / SWITCH_DISTANCE_UNIT
+const HUNDREDTHS_PER_UNIT = Math.round(100 * DISTANCE_STEP_MM)
 
 const hundredths = (mm: number) => Math.round(mm * 100)
 const readingHundredths = (distance: number) =>
@@ -228,7 +229,7 @@ export function lowestActuationPoint(deepest: number) {
     hundredths(LOWEST_MINIMUM_MM),
   )
   const unit = Math.ceil(floor / HUNDREDTHS_PER_UNIT)
-  return unitToDistance(Math.min(unit, SWITCH_DISTANCE_UNIT))
+  return unitToDistance(Math.min(unit, switchDistanceUnit()))
 }
 
 export function restVerdict(

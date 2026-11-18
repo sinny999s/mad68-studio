@@ -17,7 +17,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   import {
     displayUnitDistance,
     distanceToUnit,
-    SWITCH_DISTANCE_UNIT,
+    switchDistanceUnit,
     unitToDistance,
   } from "$lib/distance"
   import { optMap } from "$lib/utils"
@@ -27,10 +27,13 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   let {
     committed = $bindable(),
     min = 1,
-    max = SWITCH_DISTANCE_UNIT,
+    max,
     onCommit,
     ...props
   }: ComponentProps<typeof CommitSlider> = $props()
+
+  // Full travel unless the page limits it; follows Settings > Switch Travel
+  const top = $derived(max ?? switchDistanceUnit())
 </script>
 
 <CommitSlider
@@ -40,7 +43,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   }
   display={(v) => `${displayUnitDistance(v)}mm`}
   {min}
-  {max}
+  max={top}
   onCommit={(v) => onCommit?.(unitToDistance(v))}
   {...props}
 />

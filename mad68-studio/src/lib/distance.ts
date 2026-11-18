@@ -14,23 +14,41 @@
  */
 
 import { HMK_MAX_DISTANCE, HMK_MIN_DISTANCE } from "./libhmk"
+import { switchTravel } from "./switch-travel.svelte"
 
-export const SWITCH_DISTANCE_UNIT = 80
-export const SWITCH_DISTANCE_MM = 4
+// Distances on the keyboard run from 0 at rest to 255 at the bottom of the
+// key. On screen they are millimetres of the chosen switch travel (Settings >
+// Switch Travel), and the sliders move in steps of 0.05 mm: a "unit" is one
+// such step, so 4.0 mm switches have 80 of them and 3.5 mm switches 70.
+// Everything here reads the travel when it is called, so pages showing
+// distances follow a change of the setting.
+
+/** One slider step, in millimetres */
+export const DISTANCE_STEP_MM = 0.05
+
+/** Full travel of the keys, in millimetres */
+export function switchDistanceMM() {
+  return switchTravel.mm
+}
+
+/** Full travel in slider steps */
+export function switchDistanceUnit() {
+  return Math.round(switchTravel.mm / DISTANCE_STEP_MM)
+}
 
 export function unitToDistance(v: number) {
   return Math.max(
     HMK_MIN_DISTANCE,
-    Math.round((v * HMK_MAX_DISTANCE) / SWITCH_DISTANCE_UNIT),
+    Math.round((v * HMK_MAX_DISTANCE) / switchDistanceUnit()),
   )
 }
 
 export function distanceToUnit(v: number) {
-  return Math.round((v * SWITCH_DISTANCE_UNIT) / HMK_MAX_DISTANCE)
+  return Math.round((v * switchDistanceUnit()) / HMK_MAX_DISTANCE)
 }
 
 export function displayUnitDistance(v: number, decimal = 2) {
-  return ((v * SWITCH_DISTANCE_MM) / SWITCH_DISTANCE_UNIT).toFixed(decimal)
+  return (v * DISTANCE_STEP_MM).toFixed(decimal)
 }
 
 export function displayDistance(v: number, decimal = 2) {
@@ -43,5 +61,5 @@ export function displayDistance(v: number, decimal = 2) {
  * readings, where 0.33 mm should not become 0.35.
  */
 export function distanceToMM(v: number) {
-  return (v * SWITCH_DISTANCE_MM) / HMK_MAX_DISTANCE
+  return (v * switchDistanceMM()) / HMK_MAX_DISTANCE
 }

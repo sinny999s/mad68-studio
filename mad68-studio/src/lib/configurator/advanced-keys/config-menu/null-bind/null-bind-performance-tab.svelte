@@ -17,7 +17,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
   import DistanceSlider from "$lib/components/distance-slider.svelte"
   import Switch from "$lib/components/switch.svelte"
   import { actuationQueryContext } from "$lib/configurator/queries/actuation-query.svelte"
-  import { distanceToUnit, SWITCH_DISTANCE_UNIT } from "$lib/distance"
+  import { distanceToUnit, switchDistanceUnit } from "$lib/distance"
   import {
     DEFAULT_ACTUATION_POINT,
     DEFAULT_RT_SENSITIVITY,
@@ -93,7 +93,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
     {disabled}
     max={action.bottomOutPoint > 0
       ? distanceToUnit(action.bottomOutPoint)
-      : SWITCH_DISTANCE_UNIT}
+      : switchDistanceUnit()}
     title="Actuation Point"
   />
   {#if action.bottomOutPoint > 0}
